@@ -106,12 +106,7 @@ public final class AdzanOverlay {
                     textCol.addView(sub);
 
                     root.addView(textCol);
-                    root.setOnClickListener(new View.OnClickListener() {
-                        @Override
-                        public void onClick(View v) {
-                            AdzanAlert.stopAudio();
-                        }
-                    });
+                    root.setOnClickListener(v -> AdzanAlert.stopAudio());
 
                     int windowType = Build.VERSION.SDK_INT >= 26
                         ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY

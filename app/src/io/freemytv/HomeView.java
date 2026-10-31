@@ -40,6 +40,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.WeakHashMap;
 import java.util.concurrent.ExecutorService;
@@ -286,6 +287,14 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     private final RectF doaCardRect = new RectF();
     private Paint doaHeaderPaint;
     private TextPaint doaArabicPaint, doaTransPaint;
+
+    // Soccer (Sepak Bola) Theme & Widget
+    private final RectF soccerMatchCard = new RectF();
+    private final RectF soccerStandingsCard = new RectF();
+    private final SoccerSky soccerSky = new SoccerSky();
+    private SoccerData soccerData;
+    private Paint soccerLeaguePaint, soccerRolePaint, soccerTitlePaint, soccerCountdownPaint,
+            soccerSubPaint, soccerDividerPaint, soccerRowPaint, soccerHighlightPaint, soccerFormTextPaint;
     private final Spring drawer = new Spring(0.46f, 0.92f, 0);
     private boolean drawerOpen;
     private int drawerIndex;
@@ -540,6 +549,12 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         NowPlaying.setListener(() -> {
             postInvalidate();
         });
+        soccerData = SoccerData.get(a);
+        soccerData.addListener(() -> {
+            if (drawerLayer != null) drawerLayer.postInvalidate();
+            postInvalidate();
+        });
+        if (Prefs.soccer()) soccerData.refresh(false);
     }
 
     // MARK: - Lifecycle (called by HomeActivity)
@@ -565,8 +580,12 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         updatePalette();
         updatePicks();
         // Back from Home Settings: the background follows the Wallpaper setting (the sky, or the pick's photo again).
-        if (skyOn() || liteOn()) {
+        if (skyOn() || liteOn() || Prefs.soccer()) {
             if (bgTo != null) showBackdrop(null);
+            if (Prefs.soccer()) {
+                layoutSoccerCards();
+                soccerData.refresh(true);
+            }
             skyNight = skyIsNight() ? 1 : 0;   // a Sky preview picked in Settings shows straight away
             neutralGlass();
         } else if (!picksOn()) {
@@ -594,6 +613,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         okHeld = holdArmed = false;
         Choreographer.getInstance().removeFrameCallback(this);
         inkSky.release();   // the mountains' memory (the screensaver draws its own)
+        soccerSky.release();
         handler.removeCallbacks(tick);
         handler.removeCallbacks(reloadSoon);
         handler.removeCallbacks(deckNext);
@@ -609,7 +629,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
 
     /** The weather sky is the background (any Wallpaper setting but the picks' photos). */
     private boolean skyOn() {
-        return !Prefs.wallpaper().equals("photos") && !Prefs.lite();
+        return !Prefs.wallpaper().equals("photos") && !Prefs.lite() && !Prefs.soccer();
     }
 
     /** The weather the sky shows: the real one, or the one picked in Settings (Sky preview). */
@@ -738,7 +758,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         int width = MeasureSpec.getSize(widthSpec), height = MeasureSpec.getSize(heightSpec);
         float kk = width / 1920f;
         measure(sky, width, height);
-        measure(heroLayer, width, Math.round(790 * kk));
+        measure(heroLayer, width, Math.round(800 * kk));
         measure(status, Math.round(1160 * kk), Math.round(240 * kk));
         // Sized to what they draw (the glass and its shadow; the grown tiles and their shadows): smaller layers are
         // cheaper for the GPU to composite on every frame of the drawer animation.
@@ -781,6 +801,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         scene.setSize(w, h);
         weatherSky.setSize(w, h);
         inkSky.setSize(w, h);
+        soccerSky.setSize(w, h);
         makePaints();
         gridLabels = null;
         clockMinute = -1;
@@ -866,6 +887,24 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         border.setStrokeWidth(2 * k);
         rim.setStyle(Paint.Style.STROKE);
         rim.setStrokeWidth(2.5f * k);
+
+        soccerLeaguePaint = Ui.text(Ui.semibold, 18 * k, 0xFFFFE082);
+        soccerLeaguePaint.setLetterSpacing(0.08f);
+        soccerRolePaint = Ui.text(Ui.semibold, 16 * k, 0xFFFFD043);
+        soccerRolePaint.setTextAlign(Paint.Align.RIGHT);
+        soccerTitlePaint = Ui.text(Ui.displaySemibold, 32 * k, 0xFFFFFFFF);
+        soccerTitlePaint.setLetterSpacing(0.01f);
+        soccerCountdownPaint = Ui.text(Ui.semibold, 20 * k, 0xFFFFD043);
+        soccerSubPaint = Ui.text(Ui.medium, 18 * k, 0xD9FFFFFF);
+        soccerDividerPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        soccerDividerPaint.setColor(0x26FFFFFF);
+        soccerDividerPaint.setStrokeWidth(1.5f * k);
+        soccerRowPaint = Ui.text(Ui.medium, 17 * k, 0xFFFFFFFF);
+        soccerHighlightPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        soccerHighlightPaint.setColor(0x26FFC837);
+        soccerHighlightPaint.setStyle(Paint.Style.FILL);
+        soccerFormTextPaint = Ui.text(Ui.semibold, 13 * k, 0xFFFFFFFF);
+        soccerFormTextPaint.setTextAlign(Paint.Align.CENTER);
     }
 
     // MARK: - Frames: 60 per second while something moves; nothing is redrawn when still
@@ -1165,7 +1204,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
 
     /** No photo: the glass reads the background's own gray (not Scene's default aurora, which isn't on screen). */
     private void neutralGlass() {
-        int color = liteOn() ? 0xFF0B1020 : inkOn() ? inkSky.glassColor(skyCode(), inkHour())
+        int color = liteOn() ? 0xFF0B1020 : Prefs.soccer() ? 0xFF0A1E14 : inkOn() ? inkSky.glassColor(skyCode(), inkHour())
                 : skyOn() ? weatherSky.glassColor(skyCode(), Math.max(0, skyNight))
                 : blend(0xFFEBEBF0, 0xFF141416, night);
         inkGlass = color;
@@ -1192,7 +1231,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         // Rain and storms darken the weather sky enough for white text; on the ink mountains only storms do.
         boolean dark = inkOn() ? WeatherSky.kind(skyCode()) == WeatherSky.STORM : WeatherSky.dark(skyCode());
         // The Movie wallpaper is a dark billboard at any hour: white text, smoked glass
-        boolean want = picksOn() || liteOn() || skyIsNight() || skyOn() && Prefs.theme().equals("auto") && dark;
+        boolean want = picksOn() || liteOn() || Prefs.soccer() || skyIsNight() || skyOn() && Prefs.theme().equals("auto") && dark;
         if (want == nightTarget) return;
         nightTarget = want;
         if (animate && running) {
@@ -1533,7 +1572,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         }
         // Clock layout: the rates just above the shelf, at the right, at the text size from Settings (scaled from
         // that corner)
-        if (!picksOn() && !liteOn() && HomeData.coinCount() > 0) {
+        if (!picksOn() && !liteOn() && !Prefs.soccer() && HomeData.coinCount() > 0) {
             float s = Prefs.textScale(), right = quotesRight(), base = quotesBase();
             c.save();
             c.scale(s, s, right, base);
@@ -1832,6 +1871,18 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         if (!same) drawerDirty = true;
     }
 
+    private void layoutSoccerCards() {
+        float left = MARGIN * k;
+        float right = (1920 - MARGIN) * k;
+        float cardsTop = 465 * k;
+        float cardsBottom = 765 * k;
+        float matchW = 940 * k;
+        soccerMatchCard.set(left, cardsTop, left + matchW, cardsBottom);
+        soccerStandingsCard.set(left + matchW + 32 * k, cardsTop, right, cardsBottom);
+        cardRects[0].set(soccerMatchCard);
+        cardRects[1].set(soccerStandingsCard);
+    }
+
     private void layoutDrawer() {
         int n = drawerItems.size();
         float left = MARGIN * k, right = CONTENT_R * k;
@@ -1847,19 +1898,19 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         float cardsTop = CARDS_TOP * k, split = left + (right - left) * 0.585f;
         boolean wx = Prefs.weather(), qt = Prefs.quotes() && HomeData.active().length > 0;
         // A card that is off gives its room to the other one.
-        weatherCard.set(left, cardsTop, qt ? split - 16 * k : right, cardsTop + CARDS_H * k);
-        quotesCard.set(wx ? split + 16 * k : left, cardsTop, right, cardsTop + CARDS_H * k);
-        if (Config.PRAYER_TIMES) {
-            // Weather, prayer times and rates side by side, in proportion; a card that is off gives its room away.
-            float cg = 32 * k, ww = wx ? 780 : 0, pw = 440, qw = qt ? 476 : 0;
-            float scale = (right - left - cg * ((wx ? 1 : 0) + (qt ? 1 : 0))) / (ww + pw + qw);
-            float x0 = left, bottom = cardsTop + CARDS_H * k;
-            if (wx) {
-                weatherCard.set(x0, cardsTop, x0 + ww * scale, bottom);
-                x0 = weatherCard.right + cg;
-            }
-            prayerCard.set(x0, cardsTop, qt ? x0 + pw * scale : right, bottom);
-            if (qt) quotesCard.set(prayerCard.right + cg, cardsTop, right, bottom);
+            weatherCard.set(left, cardsTop, qt ? split - 16 * k : right, cardsTop + CARDS_H * k);
+            quotesCard.set(wx ? split + 16 * k : left, cardsTop, right, cardsTop + CARDS_H * k);
+            if (Config.PRAYER_TIMES) {
+                // Weather, prayer times and rates side by side, in proportion; a card that is off gives its room away.
+                float cg = 32 * k, ww = wx ? 780 : 0, pw = 440, qw = qt ? 476 : 0;
+                float scale = (right - left - cg * ((wx ? 1 : 0) + (qt ? 1 : 0))) / (ww + pw + qw);
+                float x0 = left, bottom = cardsTop + CARDS_H * k;
+                if (wx) {
+                    weatherCard.set(x0, cardsTop, x0 + ww * scale, bottom);
+                    x0 = weatherCard.right + cg;
+                }
+                prayerCard.set(x0, cardsTop, qt ? x0 + pw * scale : right, bottom);
+                if (qt) quotesCard.set(prayerCard.right + cg, cardsTop, right, bottom);
         }
         drawerDirty = true;
     }
@@ -1916,7 +1967,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         float dk = dark();
         // Frosted, like the shelf and the clock cards (Settings → Appearance → Glass)
         // (or, without the Liquid Glass shader, the same light transparent glass as theirs)
-        if ((!Prefs.glass().equals("clear") && skyOn()) || !scene.hasLiquid() || liteOn()) {
+        if ((!Prefs.glass().equals("clear") && (skyOn() || Prefs.soccer())) || !scene.hasLiquid() || liteOn()) {
             tmp.set(r);
             tmp.offset(0, drop);
             shadow.setColor(Ui.alpha(shadowColor, 1 - dk * 0.5f));
@@ -2006,6 +2057,188 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         float badgeY = r.top + 282 * k;
         Symbols.draw(getContext(), c, "speaker", x + 10 * k, badgeY - Ui.halfCap(pBadge), 18 * k, badgeColor);
         c.drawText(soundBadge, x + 26 * k, badgeY, pBadge);
+    }
+
+    private void drawSoccerMatchCard(Canvas c, RectF r) {
+        drawerCard(c, r);
+        SoccerData.MatchInfo m = soccerData.match;
+        if (m == null) return;
+
+        float x = r.left + 32 * k;
+        float right = r.right - 32 * k;
+        float top = r.top + 28 * k;
+
+        // 1. Accent indicator pill & League title
+        fill.setShader(null);
+        fill.setStyle(Paint.Style.FILL);
+        fill.setColor(0xFFFFC837);
+        tmp.set(x, top + 2 * k, x + 4 * k, top + 18 * k);
+        c.drawRoundRect(tmp, 2 * k, 2 * k, fill);
+        c.drawText(m.leagueName, x + 12 * k, top + 15 * k, soccerLeaguePaint);
+
+        // Role badge (TANDANG / KANDANG)
+        c.drawText(m.matchRole, right, top + 15 * k, soccerRolePaint);
+
+        // 2. Big Matchup Title (e.g. Udinese vs AS Roma)
+        String matchup = m.homeTeam + " vs " + m.awayTeam;
+        c.drawText(matchup, x, top + 56 * k, soccerTitlePaint);
+
+        // 3. Countdown in gold (e.g. Kick-off dalam 3 hari 2j)
+        c.drawText(m.countdown, x, top + 88 * k, soccerCountdownPaint);
+
+        // 4. Date & Time (e.g. Minggu 1 Nov 01:00 WITA)
+        c.drawText(m.matchDateTime, x, top + 114 * k, soccerSubPaint);
+
+        // 5. Form strip
+        float formY = top + 140 * k;
+        c.drawText("FORM", x, formY + 16 * k, soccerSubPaint);
+        float formX = x + 62 * k;
+        if (m.form != null && !m.form.isEmpty()) {
+            float badgeSize = 22 * k;
+            for (int i = 0; i < m.form.length(); i++) {
+                char ch = m.form.charAt(i);
+                int badgeColor = ch == 'M' ? 0xFF1DB954 : ch == 'K' ? 0xFFE53935 : 0xFF5A6672;
+                fill.setColor(badgeColor);
+                tmp.set(formX, formY, formX + badgeSize, formY + badgeSize);
+                c.drawRoundRect(tmp, 6 * k, 6 * k, fill);
+                c.drawText(String.valueOf(ch), tmp.centerX(), tmp.centerY() + 4.5f * k, soccerFormTextPaint);
+                formX += badgeSize + 6 * k;
+            }
+        }
+
+        // 6. Club Crest / Logo (on the right)
+        float crestSize = 78 * k;
+        float crestX = right - crestSize;
+        float crestY = top + 34 * k;
+        if (m.crestBitmap != null && !m.crestBitmap.isRecycled()) {
+            tmp.set(crestX, crestY, crestX + crestSize, crestY + crestSize);
+            c.drawBitmap(m.crestBitmap, null, tmp, null);
+        } else {
+            drawVectorShieldCrest(c, crestX, crestY, crestSize, m.awayTeam);
+        }
+
+        // 7. Divider line
+        float divY = top + 180 * k;
+        c.drawLine(x, divY, right, divY, soccerDividerPaint);
+
+        // 8. Previous result and upcoming fixtures
+        float botY = divY + 28 * k;
+        if (m.lastResult != null && !m.lastResult.isEmpty()) {
+            c.drawText(m.lastResult, x, botY, soccerSubPaint);
+            botY += 24 * k;
+        }
+        for (String fixture : m.upcomingFixtures) {
+            c.drawText(fixture, x, botY, cardDim);
+            botY += 22 * k;
+        }
+
+        // Remote focus outline
+        boolean focused = !sheetOpen && !drawerOpen && zone == Z_CARDS && cardIndex == 0;
+        if (focused) {
+            rim.setColor(0xFFFFFFFF);
+            rim.setStrokeWidth(3.5f * k);
+            c.drawRoundRect(r, 30 * k, 30 * k, rim);
+        }
+    }
+
+    private void drawSoccerStandingsCard(Canvas c, RectF r) {
+        drawerCard(c, r);
+        List<SoccerData.TeamStanding> list = soccerData.getDisplayStandings();
+        if (list == null || list.isEmpty()) return;
+
+        float x = r.left + 28 * k;
+        float right = r.right - 28 * k;
+        float top = r.top + 24 * k;
+
+        // 1. Title: KLASEMEN [LEAGUE] with Accent Gold Pill (Weather/Temp removed per user request)
+        fill.setShader(null);
+        fill.setStyle(Paint.Style.FILL);
+        fill.setColor(0xFFFFC837);
+        tmp.set(x, top + 2 * k, x + 4 * k, top + 18 * k);
+        c.drawRoundRect(tmp, 2 * k, 2 * k, fill);
+
+        String leagueTitle = "KLASEMEN " + soccerData.match.leagueName;
+        c.drawText(leagueTitle, x + 14 * k, top + 16 * k, soccerTitlePaint);
+
+        // 2. Table Column Headers
+        float colY = top + 52 * k;
+        c.drawText("#", x, colY, cardDim);
+        c.drawText("TIM", x + 34 * k, colY, cardDim);
+        c.drawText("M", right - 75 * k, colY, cardDim);
+        c.drawText("POIN", right, colY, cardDimRight);
+
+        // 3. Standings rows (up to 5 teams)
+        float rowY = colY + 34 * k;
+        float rowH = 34 * k;
+        int count = Math.min(5, list.size());
+        String favTeam = Prefs.soccerFavoriteTeam();
+        for (int i = 0; i < count; i++) {
+            SoccerData.TeamStanding t = list.get(i);
+            boolean isFav = t.isFavorite || (i == 4 && list.size() == 5 && t.rank > 5) || SoccerData.isTeamMatch(t.name, favTeam);
+
+            if (isFav) {
+                tmp.set(x - 8 * k, rowY - 20 * k, right + 8 * k, rowY + 8 * k);
+                c.drawRoundRect(tmp, 8 * k, 8 * k, soccerHighlightPaint);
+                soccerRowPaint.setColor(0xFFFFD043);
+                soccerRowPaint.setTypeface(Ui.semibold);
+            } else {
+                soccerRowPaint.setColor(0xFFFFFFFF);
+                soccerRowPaint.setTypeface(Ui.medium);
+            }
+
+            // Rank
+            c.drawText(String.valueOf(t.rank), x, rowY, soccerRowPaint);
+
+            // Team Name
+            String teamName = t.name;
+            if (soccerRowPaint.measureText(teamName) > (right - x - 130 * k)) {
+                teamName = teamName.substring(0, Math.min(13, teamName.length())) + "…";
+            }
+            c.drawText(teamName, x + 34 * k, rowY, soccerRowPaint);
+
+            // Played (M)
+            c.drawText(String.valueOf(t.played), right - 65 * k, rowY, soccerRowPaint);
+
+            // Points (POIN)
+            soccerRowPaint.setTextAlign(Paint.Align.RIGHT);
+            c.drawText(String.valueOf(t.points), right, rowY, soccerRowPaint);
+            soccerRowPaint.setTextAlign(Paint.Align.LEFT);
+
+            rowY += rowH;
+        }
+
+        // Remote focus outline
+        boolean focused = !sheetOpen && !drawerOpen && zone == Z_CARDS && cardIndex == 1;
+        if (focused) {
+            rim.setColor(0xFFFFFFFF);
+            rim.setStrokeWidth(3.5f * k);
+            c.drawRoundRect(r, 30 * k, 30 * k, rim);
+        }
+    }
+
+    private void drawVectorShieldCrest(Canvas c, float x, float y, float size, String teamName) {
+        fill.setShader(null);
+        fill.setStyle(Paint.Style.FILL);
+        fill.setColor(0xEE8A1820);
+        clip.reset();
+        clip.moveTo(x + size * 0.5f, y);
+        clip.lineTo(x + size, y + size * 0.22f);
+        clip.lineTo(x + size * 0.82f, y + size * 0.75f);
+        clip.lineTo(x + size * 0.5f, y + size);
+        clip.lineTo(x + size * 0.18f, y + size * 0.75f);
+        clip.lineTo(x, y + size * 0.22f);
+        clip.close();
+        c.drawPath(clip, fill);
+
+        border.setStyle(Paint.Style.STROKE);
+        border.setColor(0xFFFFD043);
+        border.setStrokeWidth(2.2f * k);
+        c.drawPath(clip, border);
+
+        String mono = teamName != null && teamName.length() >= 3 ? teamName.substring(0, 3).toUpperCase(Locale.ROOT) : "ROM";
+        Paint p = Ui.text(Ui.semibold, 16 * k, 0xFFFFD043);
+        p.setTextAlign(Paint.Align.CENTER);
+        c.drawText(mono, x + size * 0.5f, y + size * 0.58f, p);
     }
 
     /** A small chip of clear glass (the next prayer, a rate's change): a light fill, a bright rim, light on its top. */
@@ -2240,6 +2473,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             syncBill();
         }
         statusChanged |= topChanged;
+        if (Prefs.soccer()) heroDirty = true;
         tilesDirty |= snap || tilesChanged;
         statusDirty |= snap || statusChanged;
         heroDirty |= snap || heroChanged;
@@ -2732,6 +2966,11 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                 click.open();
                 if (drawerLayer != null) drawerLayer.invalidate();
                 if (heroLayer != null) heroLayer.invalidate();
+            } else if (widgetIndex == 10 || widgetIndex == 11) {
+                soccerData.refresh(true);
+                showToast("Memperbarui data sepak bola...");
+                click.open();
+                if (drawerLayer != null) drawerLayer.invalidate();
             }
             return;
         }
@@ -2760,6 +2999,13 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             it = lightButtons.get(topIndex - CATS);
             r = topRects[topIndex];
         } else if (zone == Z_CARDS) {
+            if (Prefs.soccer()) {
+                soccerData.refresh(true);
+                showToast("Memperbarui data sepak bola: " + (soccerData.match != null ? soccerData.match.leagueName : ""));
+                click.open();
+                if (heroLayer != null) heroLayer.invalidate();
+                return;
+            }
             Recs.Pick p = cardIndex < cards.size() ? cards.get(cardIndex) : null;
             if (p == null) return;
             if (p.pkg == null) {
@@ -3047,7 +3293,13 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             case Z_TOP:
                 if (i >= CATS) return label(lightButtons, i - CATS);
                 return tabs()[i] + Ui.tr(", aba ", ", tab ") + (i + 1) + Ui.tr(" de ", " of ") + CATS;
-            case Z_CARDS: return i < cards.size() ? pickText(cards.get(i)) : "";
+            case Z_CARDS:
+                if (Prefs.soccer()) {
+                    if (i == 0) return "Pertandingan Sepak Bola: " + (soccerData != null && soccerData.match != null ? soccerData.match.homeTeam + " lawan " + soccerData.match.awayTeam : "Memuat");
+                    if (i == 1) return "Klasemen Sepak Bola " + (soccerData != null && soccerData.match != null ? soccerData.match.leagueName : "");
+                    return "";
+                }
+                return i < cards.size() ? pickText(cards.get(i)) : "";
             case Z_SHELF:
                 if (reordering && i == shelfIndex) {
                     return Ui.tr("Movendo ", "Moving ", "Moviendo ") + label(shelf, i)
@@ -3083,6 +3335,12 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                 dy = (i < CATS ? heroLayer : status).getTranslationY();
                 break;
             case Z_CARDS:
+                if (Prefs.soccer()) {
+                    if (i >= 2) return false;
+                    a11yRect.set(i == 0 ? soccerMatchCard : soccerStandingsCard);
+                    dy = heroLayer.getTranslationY();
+                    break;
+                }
                 if (i >= cards.size()) return false;
                 a11yRect.set(cardRects[i]);
                 dy = heroLayer.getTranslationY();
@@ -3117,7 +3375,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         if (sheetOpen) return others.isEmpty() ? -1 : a11yId(GRID, gridIndex);
         switch (zone) {
             case Z_TOP: return a11yId(Z_TOP, topIndex);
-            case Z_CARDS: return cardIndex < cards.size() ? a11yId(Z_CARDS, cardIndex) : -1;
+            case Z_CARDS: return (Prefs.soccer() ? cardIndex < 2 : cardIndex < cards.size()) ? a11yId(Z_CARDS, cardIndex) : -1;
             case Z_SHELF: return shelf.isEmpty() ? -1 : a11yId(Z_SHELF, shelfIndex);
             case Z_DRAWER: return drawerItems.isEmpty() ? -1 : a11yId(Z_DRAWER, drawerIndex);
             case WIDGETS: return a11yId(WIDGETS, widgetIndex);
@@ -3257,6 +3515,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         catSlide.snap(topRects[tab].centerX() / k);
         catSlideW.snap(topRects[tab].width() / k);
         layoutBill();
+        if (Prefs.soccer()) layoutSoccerCards();
         heroDirty = statusDirty = true;
     }
 
@@ -3320,6 +3579,10 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             drawAurora(c);
             return;
         }
+        if (Prefs.soccer()) {
+            soccerSky.draw(c, w, h, up, skyParallax, Prefs.wallpaperMotion());
+            return;
+        }
         if (picksOn()) {
             drawBillboard(c, up);
             return;
@@ -3376,6 +3639,14 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             drawLiteClock(c);
             drawDailyDoa(c);
             drawNowPlaying(c);
+            return;
+        }
+        if (Prefs.soccer()) {
+            drawClock(c);
+            drawDailyDoa(c);
+            drawNowPlaying(c);
+            drawSoccerMatchCard(c, soccerMatchCard);
+            drawSoccerStandingsCard(c, soccerStandingsCard);
             return;
         }
         if (!picksOn()) {
@@ -3731,7 +4002,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             waveW = lWave.measureText(Ui.WAVE);
             restW = lDate.measureText(dateRest);
         }
-        float dateBase = L_DATE_BASE * k, gx = x - Ui.leftBearing(lDate, greetText), hx = gx + greetW + 10 * k;
+        float dateBase = (Prefs.soccer() ? 120 : L_DATE_BASE) * k, gx = x - Ui.leftBearing(lDate, greetText), hx = gx + greetW + 10 * k;
         c.drawText(greetText, gx, dateBase, lDate);
         // The hand turns about its wrist (bottom right of the glyph)
         c.save();
@@ -3739,11 +4010,14 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         c.drawText(Ui.WAVE, hx, dateBase + 2 * k, lWave);
         c.restore();
         c.drawText(dateRest, hx + waveW, dateBase, lDate);
-        c.drawText(clockText, x - Ui.leftBearing(lClock, clockText), L_CLOCK_BASE * k, lClock);
+        if (Prefs.soccer()) lClock.setTextSize(170 * k);
+        else lClock.setTextSize(200 * k);
+        float clockBase = (Prefs.soccer() ? 305 : L_CLOCK_BASE) * k;
+        c.drawText(clockText, x - Ui.leftBearing(lClock, clockText), clockBase, lClock);
         // English: 12-hour time, with a smaller AM / PM after it.
         if (!amPmText.isEmpty()) {
             float end = x - Ui.leftBearing(lClock, clockText) + lClock.measureText(clockText);
-            c.drawText(amPmText, end + 20 * k, L_CLOCK_BASE * k, lAmPm);
+            c.drawText(amPmText, end + 20 * k, clockBase, lAmPm);
         }
         HomeData.Weather wx = data.weather;
         if (!Prefs.weather() || Double.isNaN(wx.temp)) {
@@ -3763,7 +4037,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                     : "Máx. " + HomeData.degrees(wx.max) + "  Mín. " + HomeData.degrees(wx.min))
                     + (wx.aqi > 0 ? "   ·   AQI " + wx.aqi + " (" + HomeData.aqiCategory(wx.aqi) + ")" : "");
         }
-        float size = 40 * k, base = L_WEATHER_BASE * k;
+        float size = 40 * k, base = (Prefs.soccer() ? 360 : L_WEATHER_BASE) * k;
         String symbol = Symbols.weather(wx.code, wx.isDay);
         float sw = Symbols.width(getContext(), symbol, size);
         Symbols.draw(getContext(), c, symbol, x + sw / 2, base - Ui.halfCap(lWeather), size, lWeather.getColor());
@@ -3774,7 +4048,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     /** "Maghrib 17:45 · in 2 h 5 min" under the weather (Config.PRAYER_TIMES). */
     private void drawPrayerLine(Canvas c, float x, float symbolWidth) {
         if (!Config.PRAYER_TIMES || !refreshPrayers()) return;
-        float size = 34 * k, base = (L_QUOTES_BASE - 2) * k;
+        float size = 34 * k, base = (Prefs.soccer() ? 410 : (L_QUOTES_BASE - 2)) * k;
         float sw = Symbols.width(getContext(), "bedtime", size);
         Symbols.draw(getContext(), c, "bedtime", x + symbolWidth / 2, base - Ui.halfCap(lWeather), size, lWeather.getColor());
         c.drawText(prayerLine, x + Math.max(sw, symbolWidth) + 16 * k, base, lWeather);
@@ -3823,7 +4097,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
 
         float right = (1920 - MARGIN) * k;
         float left = right - cw;
-        float top = 340 * k;
+        float top = (Prefs.soccer() ? 220 : 340) * k;
 
         doaHeaderPaint.setTextAlign(Paint.Align.CENTER);
         float headerY = top + Ui.cap(doaHeaderPaint);
@@ -4629,7 +4903,10 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             case Z_SHELF:
                 // Up from an empty shelf too: move()'s older zones (the hero, the corner capsule) aren't drawn any more.
                 if (dy >= 0) return false;
-                if (cards.isEmpty()) {
+                if (Prefs.soccer()) {
+                    zone = Z_CARDS;
+                    cardIndex = (shelf.isEmpty() || shelfIndex < shelf.size() / 2) ? 0 : 1;
+                } else if (cards.isEmpty()) {
                     zone = Z_TOP;
                     topIndex = picksOn() ? tab : CATS;
                 } else {
@@ -4637,6 +4914,20 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                 }
                 break;
             case Z_CARDS:
+                if (Prefs.soccer()) {
+                    if (dx != 0) {
+                        int next = Math.max(0, Math.min(1, cardIndex + dx));
+                        if (next == cardIndex) return true;
+                        cardIndex = next;
+                    } else if (dy < 0) {
+                        zone = Z_TOP;
+                        topIndex = (cardIndex == 0) ? CATS : (CATS + Math.max(0, lightButtons.size() - 1));
+                    } else {
+                        zone = Z_SHELF;
+                        if (!shelf.isEmpty()) shelfIndex = nearest(tileRects, tileRects.length, (cardIndex == 0 ? soccerMatchCard : soccerStandingsCard).centerX());
+                    }
+                    break;
+                }
                 if (dx != 0) {
                     int next = Math.max(0, Math.min(cards.size() - 1, cardIndex + dx));
                     if (next == cardIndex) return true;
@@ -4656,7 +4947,10 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                     topIndex = next;
                     if (topIndex < CATS) selectTab(topIndex);   // like Apple TV tabs: focusing a tab selects it
                 } else if (dy > 0) {
-                    if (cards.isEmpty()) {
+                    if (Prefs.soccer()) {
+                        zone = Z_CARDS;
+                        cardIndex = (topIndex >= CATS + 2) ? 1 : 0;
+                    } else if (cards.isEmpty()) {
                         zone = Z_SHELF;
                     } else {
                         zone = Z_CARDS;

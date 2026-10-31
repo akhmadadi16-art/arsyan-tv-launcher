@@ -50,6 +50,7 @@ PRAYER=false; [ "$(prop prayer_times false)" = "true" ] && PRAYER=true
 CCTV_URL="$(prop cctv_url '')"
 CCTV_NAME="$(prop cctv_name 'CCTV')"
 GREETING_NAME="$(prop greeting_name '')"
+FIREBASE_STATS_URL="$(prop firebase_stats_url '')"
 
 rm -rf out && mkdir -p out/gen/io/freemytv out/classes
 cat > out/gen/io/freemytv/Config.java <<EOF
@@ -78,6 +79,7 @@ final class Config {
     static final String CCTV_URL = "$CCTV_URL";
     static final String CCTV_NAME = "$CCTV_NAME";
     static final String GREETING_NAME = "$GREETING_NAME";
+    static final String FIREBASE_STATS_URL = "$FIREBASE_STATS_URL";
 }
 EOF
 

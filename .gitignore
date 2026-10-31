@@ -28,3 +28,7 @@ onvif_watch.py
 
 # Video recordings
 *.mp4
+
+# Firebase
+google-services.json
+preview/

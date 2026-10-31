@@ -41,6 +41,7 @@ public final class OtaUpdate {
     private static final Handler MAIN_HANDLER = new Handler(Looper.getMainLooper());
     private static final java.util.concurrent.ExecutorService EXECUTOR = java.util.concurrent.Executors.newSingleThreadExecutor();
     private static final Info CURRENT_INFO = new Info();
+    public static String currentChangelog = "";
     private static boolean checking = false;
     private static boolean downloading = false;
 
@@ -232,12 +233,34 @@ public final class OtaUpdate {
         }
     }
 
+    public static String getCurrentChangelog(Context context) {
+        if (currentChangelog != null && !currentChangelog.isEmpty()) {
+            return cleanChangelog(currentChangelog);
+        }
+        if (CURRENT_INFO.changelog != null && !CURRENT_INFO.changelog.isEmpty()) {
+            return cleanChangelog(CURRENT_INFO.changelog);
+        }
+        return "• Penambahan pilihan tema sepakbola (Soccer Theme) pada wallpaper dan tampilan launcher.";
+    }
+
+    public static String cleanChangelog(String raw) {
+        if (raw == null || raw.isEmpty()) return "";
+        String s = raw;
+        int fcIdx = s.indexOf("**Full Changelog**");
+        if (fcIdx >= 0) s = s.substring(0, fcIdx);
+        s = s.replaceAll("###\\s*[^\n]*\n", "");
+        s = s.replaceAll("\\*\\*([^*]+)\\*\\*", "$1");
+        s = s.replaceAll("(?m)^\\s*\\*\\s*", "• ");
+        s = s.replaceAll("(?m)^\\s*-\\s*", "  - ");
+        return s.trim();
+    }
+
     private static String getAppVersion(Context c) {
         try {
             PackageInfo p = c.getPackageManager().getPackageInfo(c.getPackageName(), 0);
-            return p.versionName != null ? p.versionName : "2.6";
+            return p.versionName != null ? p.versionName : "2.7";
         } catch (Exception e) {
-            return "2.6";
+            return "2.7";
         }
     }
 

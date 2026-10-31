@@ -82,6 +82,7 @@ public class SettingsActivity extends Activity {
         super.onCreate(savedInstanceState);
         Watchdog.install(this);
         Ui.init(this);
+        InstallStats.recordFirstInstall(this);
         view = new SettingsView(this);
         setContentView(view);
     }
@@ -178,6 +179,8 @@ public class SettingsActivity extends Activity {
         private final Handler handler = new Handler(Looper.getMainLooper());
         private final Spring[] pop = new Spring[24];   // one per row
         private final Spring open = new Spring(0.3f, 1f, 0);   // the drawer: 0 off screen, 1 in place
+        private final Spring aboutScroll = new Spring(0.35f, 0.9f, 0);
+        private float aboutMaxScroll = 0;
         private boolean closing;
         private final List<String> appPkgs = new ArrayList<>(), appLabels = new ArrayList<>();
         // The list picker (the app of a remote button, or a city): what it shows, which one is in use, where we are.
@@ -306,6 +309,7 @@ public class SettingsActivity extends Activity {
             // widget's size, the glass); Movie only its motion (the artwork's slow breathing); Lite nothing else
             if (section == S_WALLPAPER) return Prefs.lite() ? new int[] {WALLPAPER_ROW}
                     : Prefs.wallpaper().equals("photos") ? new int[] {WALLPAPER_ROW, MOTION_ROW}
+                    : Prefs.wallpaper().equals("soccer") ? new int[] {WALLPAPER_ROW, MOTION_ROW, SOCCER_LEAGUE_ROW, SOCCER_TEAM_ROW, SOCCER_RESTART_ROW, 2, GLASS_ROW}
                     : new int[] {WALLPAPER_ROW, MOTION_ROW, SKY_WEATHER_ROW, SKY_TIME_ROW, 2, TEXT_ROW, GLASS_ROW};
             int coins = settingLabels().length - COIN_ROWS;
             int[] r = new int[6 + coins];
@@ -321,6 +325,11 @@ public class SettingsActivity extends Activity {
 
         /** A small title above a section's row (null: none). */
         private String groupTitle(int local) {
+            if (section == S_WALLPAPER && Prefs.wallpaper().equals("soccer")) {
+                if (local == 2) return Ui.indo ? "SEPAK BOLA" : Ui.tr("FUTEBOL", "FOOTBALL");
+                if (local == 5) return Ui.tr("APARÊNCIA", "APPEARANCE");
+                return null;
+            }
             if (section == S_WALLPAPER && local == 2) return Ui.tr("PRÉVIA DO CÉU", "SKY PREVIEW");
             if (section == S_WALLPAPER && local == 4) return Ui.tr("APARÊNCIA", "APPEARANCE");
             if (section == S_WIDGETS && local == 0) return Ui.tr("CLIMA", "WEATHER");
@@ -461,7 +470,7 @@ public class SettingsActivity extends Activity {
 
         @Override public void doFrame(long frameTimeNanos) {
             if (!running) return;
-            boolean moving = busy() || !open.settled();
+            boolean moving = busy() || !open.settled() || (screen == ABOUT && !aboutScroll.settled());
             for (Spring s : pop) moving |= !s.settled();
             if (moving) invalidate();   // otherwise still: the poll redraws every 2 s
             if (closing && open.value < 0.02f) {
@@ -563,6 +572,7 @@ public class SettingsActivity extends Activity {
             float dt = lastNanos == 0 ? 1 / 60f : Math.min(0.05f, (now - lastNanos) / 1e9f);
             lastNanos = now;
             open.step(dt);
+            aboutScroll.step(dt);
             for (int i = 0; i < pop.length; i++) {
                 pop[i].target = i == focus && i < rowCount() ? 1 : 0;
                 pop[i].step(dt);
@@ -794,7 +804,7 @@ public class SettingsActivity extends Activity {
                 c.drawText(labels[row], rowRect.left + INSET * k, base, rowLabel);
                 if (isSwitch(row)) {
                     drawSwitch(c, right, cy, isOn(row), f, locked);
-                } else if (isTyped(row)) {
+                } else if (isTyped(row) || row == SOCCER_RESTART_ROW) {
                     float cw = Symbols.width(getContext(), "chevron_right", 20 * k);
                     Symbols.draw(getContext(), c, "chevron_right", right - cw / 2, cy, 20 * k, blend(0x66FFFFFF, 0x801C1C1E, f));
                     rowValue.setColor(blend(0x9EFFFFFF, 0x991C1C1E, f));
@@ -813,6 +823,10 @@ public class SettingsActivity extends Activity {
                             "Lite: for TVs with little memory. A background drawn once, text and the shelf; no sky, no films, nothing moves on its own.")
                     : section == S_WALLPAPER && Prefs.wallpaper().equals("photos")
                     ? Ui.tr("Com o movimento ligado, a imagem do filme se move devagar.", "With Motion on, the film's artwork drifts slowly.")
+                    : section == S_WALLPAPER && Prefs.wallpaper().equals("soccer")
+                    ? (Ui.indo ? "Pilih liga & tim favorit, lalu klik “Mulai ulang layar utama” untuk menerapkan perubahan."
+                            : Ui.tr("Escolha a liga e o time favorito, depois toque em “Reiniciar tela inicial” para aplicar.",
+                                    "Select league & favorite team, then press “Restart home screen” to apply changes."))
                     : section == S_WALLPAPER ? Ui.tr("“Ao vivo” segue o céu de verdade.", "Live follows the real sky.")
                     : Ui.tr("OK ou ← → mudam o valor.", "OK or ← → change the value.");
             wrap(c, text, (L + INSET) * k, y, hint, 2);
@@ -995,12 +1009,17 @@ public class SettingsActivity extends Activity {
 
         /** About: the picks, the latest notices, and where this comes from. */
         private void drawAbout(Canvas c) {
-            float x = (L + INSET) * k, y = (TOP + 26) * k;
+            c.save();
+            c.clipRect(L * k, (TOP - 10) * k, R * k, (DB - 46) * k);
+            c.translate(0, -aboutScroll.value * k);
+
+            float startY = (TOP + 26) * k;
+            float x = (L + INSET) * k, y = startY;
             c.drawText(Ui.tr("PEMBARUAN SISTEM (OTA)", "SYSTEM UPDATE (OTA)"), x, y, header);
 
             float top = TOP + 38;
             rowRect.set(L * k, top * k, R * k, (top + LIST_H) * k);
-            float f = drawRowBackground(c, 0);
+            float f = (aboutScroll.target <= 20) ? drawRowBackground(c, 0) : 0;
             rowLabel.setColor(blend(0xF2FFFFFF, INK, f));
             float cy = rowRect.centerY(), base = cy + Ui.halfCap(rowLabel), right = rowRect.right - INSET * k;
 
@@ -1062,29 +1081,42 @@ public class SettingsActivity extends Activity {
             y = wrap(c, Ui.tr("Abra no celular ou no computador, na mesma rede Wi‑Fi. Código para parear: ", "Open it on a phone or a computer on the same Wi‑Fi. Code to pair: ")
                     + Dashboard.code(getContext()) + ".", x, y + 38 * k, notice, 2);
 
+            // Changelog / Notices for the current installed version
             y += 64 * k;
-            c.drawText(Ui.tr("AVISOS", "NOTICES"), x, y, header);
-            JSONArray notices = state.optJSONArray("notices");
-            int shown = 0;
-            for (int i = 0; notices != null && i < notices.length() && shown < 3; i++) {
-                JSONObject n = notices.optJSONObject(i);
-                if (n == null) continue;
-                y += 38 * k;
-                c.drawText(ago(n.optLong("at")), x, y, hint);
-                y = wrap(c, Ui.ru ? Russian.text(n.optString("text")) : n.optString("text"), x, y + 32 * k, notice, 2);
-                shown++;
-            }
-            if (shown == 0) {
-                y += 38 * k;
-                c.drawText(Ui.tr("Nenhum ainda.", "None yet."), x, y, notice);
+            c.drawText(Ui.indo ? "PEMBERITAHUAN" : Ui.tr("AVISOS", "NOTICES"), x, y, header);
+            String changelog = OtaUpdate.getCurrentChangelog(getContext());
+            String[] clLines = changelog.split("\n");
+            y += 44 * k;
+            for (String line : clLines) {
+                String tl = line.trim();
+                if (tl.isEmpty()) continue;
+                y = wrap(c, tl, x, y, notice, 4) + 26 * k;
             }
 
-            y += 64 * k;
+            y += 40 * k;
             c.drawText(Ui.tr("SOBRE", "ABOUT"), x, y, header);
             c.drawText(versionName(getContext()), x, y + 40 * k, notice);
             c.drawText(Ui.tr("Modificado por semy", "Modified by semy"), x, y + 74 * k, notice);
             c.drawText(Ui.tr("Baseado no Free My TV, de simbasjungles · Licença MIT",
                     "Based on Free My TV by simbasjungles · MIT License"), x, y + 108 * k, hint);
+            y += 130 * k;
+
+            float totalH = y - startY;
+            float visibleH = (DB - 46 - TOP - 26) * k;
+            aboutMaxScroll = Math.max(0, (totalH - visibleH) / k);
+
+            c.restore();
+
+            if (aboutMaxScroll > 0) {
+                float barRight = (R - 6) * k;
+                float barTop = TOP * k;
+                float barH = (DB - 60 - TOP) * k;
+                float thumbH = Math.max(40 * k, barH * (visibleH / totalH));
+                float thumbY = barTop + (barH - thumbH) * Math.min(1f, Math.max(0f, aboutScroll.value / aboutMaxScroll));
+                fill.setColor(0x55FFFFFF);
+                tmp.set(barRight - 4 * k, thumbY, barRight, thumbY + thumbH);
+                c.drawRoundRect(tmp, 2 * k, 2 * k, fill);
+            }
         }
 
         /** Text wrapped to the drawer's width (up to maxLines); returns the last line's baseline. */
@@ -1162,12 +1194,32 @@ public class SettingsActivity extends Activity {
             if (closing) return true;
             switch (e.getKeyCode()) {
                 case KeyEvent.KEYCODE_DPAD_UP:
+                    if (screen == ABOUT) {
+                        if (down) {
+                            if (aboutScroll.target > 0) {
+                                aboutScroll.target = Math.max(0, aboutScroll.target - 120);
+                                click.move();
+                                invalidate();
+                                return true;
+                            }
+                        }
+                    }
                     if (down && focus > 0) { focus--; click.move(); }
                     else if (down && scrolling() && pickScroll > 0) { pickScroll--; click.move(); }
                     invalidate();
                     spoken.focusMoved();
                     return true;
                 case KeyEvent.KEYCODE_DPAD_DOWN:
+                    if (screen == ABOUT) {
+                        if (down) {
+                            if (aboutScroll.target < aboutMaxScroll) {
+                                aboutScroll.target = Math.min(aboutMaxScroll, aboutScroll.target + 120);
+                                click.move();
+                                invalidate();
+                                return true;
+                            }
+                        }
+                    }
                     if (down && focus < rowCount() - 1) { focus++; click.move(); }
                     else if (down && scrolling() && pickScroll + rowCount() < listSize()) { pickScroll++; click.move(); }
                     invalidate();
@@ -1273,7 +1325,8 @@ public class SettingsActivity extends Activity {
          * weather, wallpaper, its motion, the sky preview (weather, time of day), city, quotes, then one row per coin.
          */
         private static final int WALLPAPER_ROW = 5, MOTION_ROW = 6, SKY_WEATHER_ROW = 7, SKY_TIME_ROW = 8,
-                CITY_ROW = 9, QUOTES_ROW = 10, TEXT_ROW = 11, NAME_ROW = 12, CAMERA_ROW = 13, CAMERA_URL_ROW = 14, GLASS_ROW = 15, ADZAN_SOUND_ROW = 16, COIN_ROWS = 17;
+                CITY_ROW = 9, QUOTES_ROW = 10, TEXT_ROW = 11, NAME_ROW = 12, CAMERA_ROW = 13, CAMERA_URL_ROW = 14, GLASS_ROW = 15, ADZAN_SOUND_ROW = 16,
+                SOCCER_LEAGUE_ROW = 17, SOCCER_TEAM_ROW = 18, SOCCER_RESTART_ROW = 19, COIN_ROWS = 20;
 
         /** Rows whose value is typed (OK opens the keyboard): the city, the name, the camera's address. */
         private static boolean isTyped(int row) {
@@ -1304,6 +1357,9 @@ public class SettingsActivity extends Activity {
             l.add(Ui.tr("Endereço da câmera", "Camera address"));
             l.add(Ui.tr("Vidro", "Glass"));
             l.add(Ui.indo ? "Suara adzan" : Ui.tr("Som do Adhan", "Adzan sound"));
+            l.add(Ui.indo ? "Pilihan liga" : Ui.tr("Liga de futebol", "Football league"));
+            l.add(Ui.indo ? "Tim favorit" : Ui.tr("Time favorito", "Favorite team"));
+            l.add(Ui.indo ? "Mulai ulang layar utama" : Ui.tr("Reiniciar tela inicial", "Restart home screen"));
             if (HomeData.RATES) {
                 for (int i = 0; i < HomeData.RATE_CODES.length; i++) l.add(HomeData.coinName(i));
             } else {
@@ -1329,6 +1385,7 @@ public class SettingsActivity extends Activity {
             v[CITY_ROW] = !cityStatus.isEmpty() ? cityStatus : Prefs.city().isEmpty() ? Ui.tr("Escolher", "Choose") : Prefs.city();
             String wp = Prefs.wallpaper();
             v[WALLPAPER_ROW] = wp.equals("photos") ? Ui.tr("Filme", "Movie") : wp.equals("lite") ? "Lite"
+                    : wp.equals("soccer") ? (Ui.indo ? "Sepak bola" : Ui.tr("Futebol", "Football"))
                     : wp.equals("ink") ? Ui.tr("Papel de parede vivo", "Live wallpaper") : Ui.tr("Céu do clima", "Weather sky");
             v[MOTION_ROW] = onOff(Prefs.wallpaperMotion());
             String[] weathers = {Ui.tr("Ao vivo", "Live"), Ui.tr("Céu limpo", "Clear"), Ui.tr("Parcialmente nublado", "Partly cloudy"),
@@ -1342,6 +1399,10 @@ public class SettingsActivity extends Activity {
             String glass = Prefs.glass();
             v[GLASS_ROW] = glass.equals("clear") ? Ui.tr("Transparente", "Transparent") : Ui.tr("Fosco", "Frosted");
             v[ADZAN_SOUND_ROW] = onOff(Prefs.adzanSound());
+            int lIdx = java.util.Arrays.asList(Prefs.SOCCER_LEAGUES).indexOf(Prefs.soccerLeague());
+            v[SOCCER_LEAGUE_ROW] = lIdx >= 0 ? Prefs.SOCCER_LEAGUE_NAMES[lIdx] : "Serie A";
+            v[SOCCER_TEAM_ROW] = Prefs.soccerFavoriteTeam();
+            v[SOCCER_RESTART_ROW] = Ui.indo ? "Terapkan perubahan" : Ui.tr("Aplicar alterações", "Apply changes");
             v[TEXT_ROW] = size.equals("small") ? Ui.tr("Pequeno", "Small") : size.equals("large") ? Ui.tr("Grande", "Large") : Ui.tr("Médio", "Medium");
             v[NAME_ROW] = Prefs.greetingName().isEmpty() ? Ui.tr("Nenhum", "None") : Prefs.greetingName();
             v[CAMERA_ROW] = onOff(Prefs.camera());
@@ -1457,6 +1518,44 @@ public class SettingsActivity extends Activity {
                 case TEXT_ROW: {
                     int at = java.util.Arrays.asList(TEXT_SIZES).indexOf(Prefs.textSize());
                     Prefs.setTextSize(TEXT_SIZES[(at + dir + TEXT_SIZES.length) % TEXT_SIZES.length]);
+                    break;
+                }
+                case SOCCER_LEAGUE_ROW: {
+                    int at = java.util.Arrays.asList(Prefs.SOCCER_LEAGUES).indexOf(Prefs.soccerLeague());
+                    int n = Prefs.SOCCER_LEAGUES.length;
+                    String newL = Prefs.SOCCER_LEAGUES[(Math.max(0, at) + dir + n) % n];
+                    Prefs.setSoccerLeague(newL);
+                    if (newL.equals("4332")) Prefs.setSoccerFavoriteTeam("Roma");
+                    else if (newL.equals("4328")) Prefs.setSoccerFavoriteTeam("Arsenal");
+                    else if (newL.equals("4335")) Prefs.setSoccerFavoriteTeam("Real Madrid");
+                    else if (newL.equals("4331")) Prefs.setSoccerFavoriteTeam("Bayern");
+                    else if (newL.equals("4790")) Prefs.setSoccerFavoriteTeam("Persija");
+                    else if (newL.equals("4480")) Prefs.setSoccerFavoriteTeam("Real Madrid");
+                    SoccerData.get(getContext()).clearCache();
+                    SoccerData.get(getContext()).refresh(true);
+                    break;
+                }
+                case SOCCER_TEAM_ROW: {
+                    String lId = Prefs.soccerLeague();
+                    String[] teams;
+                    if (lId.equals("4332")) teams = new String[] {"Roma", "Lazio", "Inter", "Milan", "Juventus", "Napoli", "Como"};
+                    else if (lId.equals("4328")) teams = new String[] {"Arsenal", "Liverpool", "Man City", "Man United", "Chelsea", "Tottenham"};
+                    else if (lId.equals("4335")) teams = new String[] {"Real Madrid", "Barcelona", "Atletico", "Sevilla", "Villarreal"};
+                    else if (lId.equals("4331")) teams = new String[] {"Bayern", "Dortmund", "Leverkusen", "Leipzig", "Frankfurt"};
+                    else if (lId.equals("4790")) teams = new String[] {"Persija", "Persib", "Bali United", "Persebaya", "Arema", "Dewa United"};
+                    else teams = new String[] {"Real Madrid", "Man City", "Bayern", "PSG", "Barcelona", "Liverpool"};
+
+                    int at = java.util.Arrays.asList(teams).indexOf(Prefs.soccerFavoriteTeam());
+                    int n = teams.length;
+                    Prefs.setSoccerFavoriteTeam(teams[(Math.max(0, at) + dir + n) % n]);
+                    SoccerData.get(getContext()).clearCache();
+                    SoccerData.get(getContext()).refresh(true);
+                    break;
+                }
+                case SOCCER_RESTART_ROW: {
+                    SoccerData.get(getContext()).clearCache();
+                    SoccerData.get(getContext()).refresh(true);
+                    Dashboard.careFrom(getContext(), "home", r -> {});
                     break;
                 }
                 default:
@@ -1830,6 +1929,7 @@ public class SettingsActivity extends Activity {
             } else if (focus == S_ABOUT) {
                 screen = ABOUT;
                 focus = 0;
+                aboutScroll.snap(0);
                 OtaUpdate.check(c, inf -> postInvalidate());
             } else {
                 activity.startActivity(new Intent(Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
