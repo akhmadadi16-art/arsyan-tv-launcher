@@ -2,7 +2,7 @@
 
 [![Total Installs](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Farsyan-tv-default-rtdb.asia-southeast1.firebasedatabase.app%2Flauncher_stats.json&query=%24.total_installs&label=Installs&color=blue&logo=android)](https://github.com/ssemyy-sds/arsyan-tv-launcher)
 
-A clean, modern, and aesthetic Android TV launcher inspired by Nothing OS and Apple TV design philosophies. Built natively for Android TV and Google TV devices with fluid glassmorphism, clean typography, live dynamic weather, real-time Air Quality Index (AQI), currency exchange rates, dynamic daily Islamic prayers/ayahs, **Now Playing music overlay (BitChord / Spotify / YouTube Music)**, **seamless Over-The-Air (OTA) updates**, and automatic Adzan prayer time notifications. Preconfigured with Kota Batam as default, with full support for any city across Indonesia and worldwide.
+A clean, modern, and aesthetic Android TV launcher inspired by Nothing OS and Apple TV design philosophies. Built natively for Android TV and Google TV devices with fluid glassmorphism, clean typography, live dynamic weather, real-time Air Quality Index (AQI), currency exchange rates, dynamic daily Islamic prayers/ayahs, **Live Football / Soccer Theme (Jadwal Pertandingan & Klasemen Liga)**, **Now Playing music overlay (BitChord / Spotify / YouTube Music)**, **seamless Over-The-Air (OTA) updates**, and automatic Adzan prayer time notifications. Preconfigured with Kota Batam as default, with full support for any city across Indonesia and worldwide.
 
 ---
 
@@ -15,14 +15,28 @@ Clean typography layout for the clock, real-time weather, AQI index, prayer coun
 
 ---
 
-### 2. Centered Adzan Notification (~50% Screen)
+### 2. Live Soccer / Sepak Bola Theme & Match Widget
+Dukungan wallpaper tema sepak bola dengan latar lapangan bertekstur rumput hidup dan pencahayaan lampu stadion (*stadium floodlights*). Menampilkan kartu pertandingan terkini untuk tim favorit lengkap dengan hitung mundur kick-off, logo klub, status kandang/tandang, form laga terakhir, serta tabel klasemen top liga secara langsung.
+
+![Soccer Theme Home](screenshots/soccer_theme_home.jpg)
+
+---
+
+### 3. Pengaturan Pilihan Liga & Tim Favorit
+Pilihan tema wallpaper Sepak Bola yang fleksibel langsung dari menu Pengaturan TV. Bebas memilih liga top dunia (Premier League, La Liga, Serie A, Bundesliga, Liga 1 Indonesia, UEFA Champions League) beserta klub favorit Anda hanya dengan tombol remote TV.
+
+![Soccer Theme Settings](screenshots/soccer_theme_settings.jpg)
+
+---
+
+### 4. Centered Adzan Notification (~50% Screen)
 An elegant, frosted smoked-glass modal (50% width) displayed in the center of the screen when prayer time arrives, accompanied by full Adzan audio that can be silenced immediately with any remote button.
 
 ![Adzan Notification Banner](screenshots/adzan_banner.png)
 
 ---
 
-### 3. Widget & Sound Settings
+### 5. Widget & Sound Settings
 Easily toggle Adzan sound on or off directly through the TV settings or within the drawer widget area.
 
 ![Settings Widgets](screenshots/settings_widgets.png)
@@ -34,6 +48,11 @@ Easily toggle Adzan sound on or off directly through the TV settings or within t
 - **Exclusive Focus on Android TV**:
   - Engineered natively for Android TV & Google TV (API 28+ / Android 9 to Android 14+).
   - Lightweight custom drawing pipeline using native Android `Canvas` without heavy WebView or hybrid framework overhead (runs at smooth 60 fps).
+- **Tema Sepak Bola Interaktif (Live Football Matches & Standings)**:
+  - Wallpaper dinamis bertema lapangan hijau dengan efek pencahayaan stadion (*stadium floodlights*), gawang, dan visual bola animasi.
+  - **Kartu Pertandingan Klub Favorit**: Menampilkan jadwal kick-off mendatang (dengan countdown waktu nyata), venue (Kandang/Tandang), lambang klub, dan riwayat 5 pertandingan terakhir (*form guide*).
+  - **Klasemen Liga Terkini**: Tabel klasemen top 5 liga yang diperbarui secara otomatis dari live football API.
+  - **Mendukung Banyak Liga Populer**: English Premier League, La Liga Spanyol, Serie A Italia, Bundesliga Jerman, BRI Liga 1 Indonesia, dan UEFA Champions League yang dapat diganti sewaktu-waktu melalui menu Pengaturan.
 - **Now Playing Music Widget (BitChord & Universal Media)**:
   - Automatically captures active playback metadata from **BitChord** (`com.music.bitchord.tv`), Spotify, YouTube Music, and any Android media app via native `MediaSession`.
   - Displays high-resolution rounded album cover art, song title, artist, progress line, and live play/pause indicator.
