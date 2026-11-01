@@ -110,6 +110,8 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     private final InkSky inkSky = new InkSky(weatherSky);
     private int inkGlass;   // the glass color last set for the ink wallpaper
     private float skyParallax, skyParallaxTarget;
+    private float skyParallaxY, skyParallaxYTarget;
+    private float dpadImpulseX, dpadImpulseY;
     /** The sky's own day ⇄ night (sunset to sunrise): a rainy day turns the text white, but the sky stays a day sky. */
     private float skyNight = -1;
     private long skyDrawnAt;
@@ -935,11 +937,29 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         boolean skyBusy = false;
         long skyWait = -1;   // only the sky drifting: ms until its next frame (the loop sleeps until then)
         if (skyOn()) {
-            // Parallax: the sky slides the other way as the focus moves along the shelf, and eases into place.
+            // Parallax: horizontal tracking along the shelf plus interactive D-pad impulse
             if (zone == Z_SHELF && shelf.size() > 1) skyParallaxTarget = shelfIndex / (float) (shelf.size() - 1) * 2 - 1;
             float diff = skyParallaxTarget - skyParallax;
             boolean sliding = Math.abs(diff) > 0.002f;
-            skyParallax = sliding ? skyParallax + diff * Math.min(1, dt * 2.5f) : skyParallaxTarget;
+            skyParallax = sliding ? skyParallax + diff * Math.min(1, dt * 3.5f) : skyParallaxTarget;
+
+            // Vertical perspective shift based on active zone
+            skyParallaxYTarget = zone == Z_TOP ? -0.45f : (zone == Z_DRAWER ? 0.45f : 0f);
+            float diffY = skyParallaxYTarget - skyParallaxY;
+            if (Math.abs(diffY) > 0.002f) {
+                skyParallaxY += diffY * Math.min(1f, dt * 3.5f);
+                sliding = true;
+            } else {
+                skyParallaxY = skyParallaxYTarget;
+            }
+
+            // Smoothly decay D-pad interactive impulse
+            if (Math.abs(dpadImpulseX) > 0.002f || Math.abs(dpadImpulseY) > 0.002f) {
+                dpadImpulseX *= Math.max(0f, 1f - dt * 4.0f);
+                dpadImpulseY *= Math.max(0f, 1f - dt * 4.0f);
+                sliding = true;
+            }
+
             // Sunset and sunrise: the sky fades between its day and night colors over ~3 s.
             float nightTo = skyIsNight() ? 1 : 0;
             if (skyNight < 0) skyNight = nightTo;
@@ -948,20 +968,14 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
                 sliding = true;
                 if (skyNight == nightTo) neutralGlass();
             }
-            // The sky's own motion, at 20 frames a second (enough for clouds and rain, light on older TVs); not
-            // under the All Apps sheet.
             boolean animating = Prefs.wallpaperMotion() && sheet.value < 0.5f;
-            // The ink mountains' clouds and mist drift slowly: 12 frames a second is enough (rain keeps 20).
-            int kind = WeatherSky.kind(skyCode());
-            long frame = inkOn() && kind != WeatherSky.RAIN && kind != WeatherSky.STORM ? 83 : 50;
-            if (sliding || animating && up - skyDrawnAt >= frame) {
+            long frame = (inkOn() || sliding) ? 16 : 40;
+            if (sliding || (animating && up - skyDrawnAt >= frame)) {
                 sky.invalidate();
                 skyDrawnAt = up;
             }
-            // Sliding or fading needs every frame; a drift alone needs one every 83 ms (50 for rain): no need to wake
-            // up 60 times a second for it.
-            skyBusy = sliding;
-            if (!sliding && animating) skyWait = Math.max(1, frame - (up - skyDrawnAt));
+            skyBusy = sliding || (animating && inkOn());
+            if (!sliding && animating && !inkOn()) skyWait = Math.max(1, frame - (up - skyDrawnAt));
         }
         // For You: the artwork crossfades, then breathes at 20 frames a second (it drifts a few pixels a second); the
         // film's text rises in and the row slides in at full speed
@@ -2771,16 +2785,32 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         }
         switch (code) {
             case KeyEvent.KEYCODE_DPAD_LEFT:
-                if (down) move(-1, 0);
+                if (down) {
+                    move(-1, 0);
+                    dpadImpulseX = Math.max(-0.8f, Math.min(0.8f, dpadImpulseX - 0.25f));
+                    inkSky.onDpad(-1f, 0f);
+                }
                 return true;
             case KeyEvent.KEYCODE_DPAD_RIGHT:
-                if (down) move(1, 0);
+                if (down) {
+                    move(1, 0);
+                    dpadImpulseX = Math.max(-0.8f, Math.min(0.8f, dpadImpulseX + 0.25f));
+                    inkSky.onDpad(1f, 0f);
+                }
                 return true;
             case KeyEvent.KEYCODE_DPAD_UP:
-                if (down) move(0, -1);
+                if (down) {
+                    move(0, -1);
+                    dpadImpulseY = Math.max(-0.6f, Math.min(0.6f, dpadImpulseY - 0.25f));
+                    inkSky.onDpad(0f, -1f);
+                }
                 return true;
             case KeyEvent.KEYCODE_DPAD_DOWN:
-                if (down) move(0, 1);
+                if (down) {
+                    move(0, 1);
+                    dpadImpulseY = Math.max(-0.6f, Math.min(0.6f, dpadImpulseY + 0.25f));
+                    inkSky.onDpad(0f, 1f);
+                }
                 return true;
             case KeyEvent.KEYCODE_DPAD_CENTER:
             case KeyEvent.KEYCODE_ENTER:
@@ -3589,7 +3619,11 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         }
         if (skyOn()) {
             if (skyNight < 0) skyNight = skyIsNight() ? 1 : 0;
-            if (inkOn()) inkSky.draw(c, skyCode(), inkHour(), up, skyParallax, Prefs.wallpaperMotion());
+            if (inkOn()) {
+                float totalPx = Math.max(-1.8f, Math.min(1.8f, skyParallax + dpadImpulseX));
+                float totalPy = Math.max(-1.5f, Math.min(1.5f, skyParallaxY + dpadImpulseY));
+                inkSky.draw(c, skyCode(), inkHour(), up, totalPx, totalPy, Prefs.wallpaperMotion());
+            }
             else weatherSky.draw(c, skyCode(), skyNight, up, skyParallax, Prefs.wallpaperMotion());
             // Drawer open: the same lighter (day) or darker (night) veil as over the photos.
             float veil = skyVeilOff ? 0 : skyVeil();

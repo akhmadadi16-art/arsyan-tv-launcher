@@ -29,6 +29,15 @@ import android.view.View;
 import android.view.accessibility.AccessibilityNodeProvider;
 import android.view.inputmethod.EditorInfo;
 import android.widget.EditText;
+import android.graphics.BitmapFactory;
+import android.graphics.drawable.GradientDrawable;
+import android.util.TypedValue;
+import android.view.Gravity;
+import android.widget.FrameLayout;
+import android.widget.ImageView;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
+import android.widget.TextView;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -395,6 +404,18 @@ public class SettingsActivity extends Activity {
                     return app[1] + ", " + (place >= 0 ? Ui.tr("na prateleira, posição ", "on the shelf, place ") + (place + 1)
                             : Ui.tr("fora da prateleira", "not on the shelf"));
                 }
+                case ABOUT: {
+                    if (row == 0) {
+                        OtaUpdate.Info info = OtaUpdate.getInfo();
+                        String label = info.state == OtaUpdate.State.AVAILABLE ? Ui.tr("Pasang Pembaruan", "Install Update")
+                                : info.state == OtaUpdate.State.DOWNLOADING ? Ui.tr("Sedang Mengunduh", "Downloading")
+                                : Ui.tr("Periksa Pembaruan", "Check for Updates");
+                        return label + ", " + (info.message.isEmpty() ? ("v" + versionName(getContext())) : info.message);
+                    } else if (row == 1) {
+                        return "Traktir Kopi, Dukung Developer";
+                    }
+                    return "";
+                }
                 case CARE: {
                     String[] labels = careLabels();
                     return row < labels.length ? labels[row] + (careText[row] == null ? "" : ", " + careText[row]) : "";
@@ -411,7 +432,7 @@ public class SettingsActivity extends Activity {
                 case MAIN: return TOP + i * (MAIN_H + GAP) + (i > S_SCREENSAVER ? DIVIDER : 0) + (i > S_REMOTE ? DIVIDER : 0);
                 case HOME_CHOICE: return TOP + i * (CHOICE_H + 8);
                 case CARE: return CARE_TOP + i * (LIST_H + GAP);
-                case ABOUT: return TOP + 38;
+                case ABOUT: return TOP + 38 + i * (LIST_H + 8);
                 case HOME_SETTINGS: {
                     float y = TOP + i * (LIST_H + GAP);
                     for (int j = 0; j <= i; j++) if (groupTitle(j) != null) y += HEADER;
@@ -556,7 +577,7 @@ public class SettingsActivity extends Activity {
                 case MAIN: return SECTIONS;
                 case HOME_CHOICE: return 2;
                 case HOME_SETTINGS: return sectionRows().length;
-                case ABOUT: return 1;
+                case ABOUT: return 2;
                 case CARE: return CARE_ACTIONS.length;
                 case PICKER: return Math.min(PICK_VISIBLE, pickLabels.size());
                 case SHELF_EDIT: return Math.min(PICK_VISIBLE, shelfRows.size());
@@ -1019,21 +1040,35 @@ public class SettingsActivity extends Activity {
 
             float top = TOP + 38;
             rowRect.set(L * k, top * k, R * k, (top + LIST_H) * k);
-            float f = (aboutScroll.target <= 20) ? drawRowBackground(c, 0) : 0;
-            rowLabel.setColor(blend(0xF2FFFFFF, INK, f));
-            float cy = rowRect.centerY(), base = cy + Ui.halfCap(rowLabel), right = rowRect.right - INSET * k;
+            float f0 = (aboutScroll.target <= 20 && focus == 0) ? drawRowBackground(c, 0) : 0;
+            rowLabel.setColor(blend(0xF2FFFFFF, INK, f0));
+            float cy0 = rowRect.centerY(), base0 = cy0 + Ui.halfCap(rowLabel), right0 = rowRect.right - INSET * k;
 
             OtaUpdate.Info info = OtaUpdate.getInfo();
             String label = info.state == OtaUpdate.State.AVAILABLE ? Ui.tr("Pasang Pembaruan", "Install Update")
                     : info.state == OtaUpdate.State.DOWNLOADING ? Ui.tr("Sedang Mengunduh", "Downloading")
                     : Ui.tr("Periksa Pembaruan", "Check for Updates");
-            c.drawText(label, rowRect.left + INSET * k, base, rowLabel);
+            c.drawText(label, rowRect.left + INSET * k, base0, rowLabel);
 
             String otaStatus = info.message.isEmpty() ? ("v" + versionName(getContext())) : info.message;
-            int statusColor = info.state == OtaUpdate.State.AVAILABLE ? GREEN : blend(0x9EFFFFFF, 0x991C1C1E, f);
+            int statusColor = info.state == OtaUpdate.State.AVAILABLE ? GREEN : blend(0x9EFFFFFF, 0x991C1C1E, f0);
             rowValue.setColor(statusColor);
             float room = rowRect.width() - 2 * INSET * k - rowLabel.measureText(label) - 24 * k;
-            c.drawText(TextUtils.ellipsize(otaStatus, new TextPaint(rowValue), Math.max(60 * k, room), TextUtils.TruncateAt.END).toString(), right, base, rowValue);
+            c.drawText(TextUtils.ellipsize(otaStatus, new TextPaint(rowValue), Math.max(60 * k, room), TextUtils.TruncateAt.END).toString(), right0, base0, rowValue);
+
+            // Row 1: Traktir Kopi
+            top += LIST_H + 8;
+            rowRect.set(L * k, top * k, R * k, (top + LIST_H) * k);
+            float f1 = (aboutScroll.target <= 20 && focus == 1) ? drawRowBackground(c, 1) : 0;
+            rowLabel.setColor(blend(0xF2FFFFFF, INK, f1));
+            float cy1 = rowRect.centerY(), base1 = cy1 + Ui.halfCap(rowLabel), right1 = rowRect.right - INSET * k;
+
+            String coffeeLabel = Ui.indo ? "Traktir Kopi ☕" : Ui.tr("Traktir Kopi ☕", "Buy me a Coffee ☕");
+            c.drawText(coffeeLabel, rowRect.left + INSET * k, base1, rowLabel);
+
+            String coffeeAction = Ui.indo ? "Scan QR Donasi" : Ui.tr("Scan QR Donasi", "Scan QR Code");
+            rowValue.setColor(blend(0x9EFFFFFF, 0x991C1C1E, f1));
+            c.drawText(coffeeAction, right1 - rowValue.measureText(coffeeAction), base1, rowValue);
 
             y = (top + LIST_H + 46) * k;
             c.drawText(Ui.tr("RECOMENDAÇÕES", "RECOMMENDATIONS"), x, y, header);
@@ -1201,8 +1236,15 @@ public class SettingsActivity extends Activity {
                                 click.move();
                                 invalidate();
                                 return true;
+                            } else if (focus > 0) {
+                                focus--;
+                                click.move();
+                                invalidate();
+                                spoken.focusMoved();
+                                return true;
                             }
                         }
+                        return true;
                     }
                     if (down && focus > 0) { focus--; click.move(); }
                     else if (down && scrolling() && pickScroll > 0) { pickScroll--; click.move(); }
@@ -1212,13 +1254,20 @@ public class SettingsActivity extends Activity {
                 case KeyEvent.KEYCODE_DPAD_DOWN:
                     if (screen == ABOUT) {
                         if (down) {
-                            if (aboutScroll.target < aboutMaxScroll) {
+                            if (focus < rowCount() - 1) {
+                                focus++;
+                                click.move();
+                                invalidate();
+                                spoken.focusMoved();
+                                return true;
+                            } else if (aboutScroll.target < aboutMaxScroll) {
                                 aboutScroll.target = Math.min(aboutMaxScroll, aboutScroll.target + 120);
                                 click.move();
                                 invalidate();
                                 return true;
                             }
                         }
+                        return true;
                     }
                     if (down && focus < rowCount() - 1) { focus++; click.move(); }
                     else if (down && scrolling() && pickScroll + rowCount() < listSize()) { pickScroll++; click.move(); }
@@ -1600,6 +1649,79 @@ public class SettingsActivity extends Activity {
             dialog.show();
         }
 
+        private void showCoffeeDialog() {
+            try {
+                Bitmap qrBitmap;
+                try (java.io.InputStream in = activity.getAssets().open("qr_kopi.png")) {
+                    qrBitmap = BitmapFactory.decodeStream(in);
+                }
+                if (qrBitmap == null) return;
+
+                float density = activity.getResources().getDisplayMetrics().density;
+                int pad16 = Math.round(16 * density);
+                int pad24 = Math.round(24 * density);
+                int qrSize = Math.round(270 * density);
+
+                LinearLayout root = new LinearLayout(activity);
+                root.setOrientation(LinearLayout.VERTICAL);
+                root.setGravity(Gravity.CENTER_HORIZONTAL);
+                root.setPadding(pad24, pad16, pad24, pad16);
+
+                // Sweet message
+                TextView msgView = new TextView(activity);
+                msgView.setText("traktir developer untuk beli kopi, berapapun developer sangat amat berterimakasih, semoga anda dilancarkan rejekinya");
+                msgView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+                msgView.setTextColor(0xEEFFFFFF);
+                msgView.setGravity(Gravity.CENTER);
+                msgView.setLineSpacing(0, 1.25f);
+                LinearLayout.LayoutParams msgParams = new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+                msgParams.setMargins(0, 0, 0, Math.round(18 * density));
+                root.addView(msgView, msgParams);
+
+                // White rounded card for QR code
+                FrameLayout card = new FrameLayout(activity);
+                GradientDrawable cardBg = new GradientDrawable();
+                cardBg.setColor(0xFFFFFFFF);
+                cardBg.setCornerRadius(16 * density);
+                card.setBackground(cardBg);
+                int qrPad = Math.round(12 * density);
+                card.setPadding(qrPad, qrPad, qrPad, qrPad);
+
+                ImageView qrView = new ImageView(activity);
+                qrView.setImageBitmap(qrBitmap);
+                qrView.setScaleType(ImageView.ScaleType.FIT_CENTER);
+                card.addView(qrView, new FrameLayout.LayoutParams(qrSize, qrSize, Gravity.CENTER));
+
+                LinearLayout.LayoutParams cardParams = new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+                cardParams.gravity = Gravity.CENTER_HORIZONTAL;
+                root.addView(card, cardParams);
+
+                // Scan instruction
+                TextView hintView = new TextView(activity);
+                hintView.setText("Buka kamera HP atau aplikasi m-Banking / e-Wallet (GoPay, OVO, Dana, BCA, dll) untuk scan QR");
+                hintView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+                hintView.setTextColor(0x99FFFFFF);
+                hintView.setGravity(Gravity.CENTER);
+                LinearLayout.LayoutParams hintParams = new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+                hintParams.setMargins(0, Math.round(14 * density), 0, 0);
+                root.addView(hintView, hintParams);
+
+                ScrollView scroll = new ScrollView(activity);
+                scroll.addView(root);
+
+                AlertDialog dialog = new AlertDialog.Builder(activity, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                        .setTitle("☕ Traktir Kopi")
+                        .setView(scroll)
+                        .setPositiveButton("Tutup", null)
+                        .create();
+                dialog.show();
+            } catch (Exception ignored) {
+            }
+        }
+
         private void askName() {
             askText(Ui.tr("Seu nome", "Your name"), Ui.tr("Vazio: só a saudação", "Empty: just the greeting"), Prefs.greetingName(),
                     android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_FLAG_CAP_WORDS, name -> {
@@ -1855,6 +1977,8 @@ public class SettingsActivity extends Activity {
                         OtaUpdate.check(c, inf -> postInvalidate());
                     }
                     invalidate();
+                } else if (focus == 1) {
+                    showCoffeeDialog();
                 }
                 return;
             }

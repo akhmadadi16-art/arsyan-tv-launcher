@@ -1,675 +1,907 @@
 package io.freemytv;
 
-import android.graphics.Bitmap;
-import android.graphics.BlurMaskFilter;
 import android.graphics.Canvas;
+import android.graphics.Color;
 import android.graphics.LinearGradient;
 import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.RadialGradient;
 import android.graphics.RectF;
 import android.graphics.Shader;
-import android.os.SystemClock;
 
 import java.util.Random;
 
 /**
- * The "Ink mountains" wallpaper: a cream sky with a red sun over layered ridges of mountains with fine contour lines,
- * fading into mist. Its colors follow the time of day (dawn, sunrise, a misty morning, a bright noon, the afternoon,
- * golden hour, the sun setting behind the peaks at Maghrib, dusk, and the moon at night) and are tinted by the weather
- * (soft cloud washes, raindrops on the glass, lightning, haze).
- *
- * The mountains and clouds are drawn into bitmaps on a background thread, again every 6 minutes of the day (their
- * colors change slowly), and the new ones fade in over 2 s; each frame only moves bitmaps, so it costs about what the
- * weather sky does.
- *
- * Hours here are on a fixed day with sunrise at 5:45 and sunset at 17:42; the home screen maps the real time onto it
- * with the day's real sunrise and sunset (canonical()).
+ * Procedural dynamic Ocean & Coast vector wallpaper.
+ * Renders an open ocean horizon, 3 layered animated waves, time-of-day lighting
+ * with Sun/Moon rising and setting directly into the sea horizon, celestial reflection
+ * corridor, coastal beach shoreline, wind-swayed coconut palms, and an interactive
+ * school of fish swimming in the sea responsive to D-Pad navigation.
  */
 final class InkSky {
-    private static final int CLEAR = 0, PARTLY = 1, CLOUDY = 2, RAIN = 3, STORM = 4, FOG = 5;
-    private static final float FAR = 28, MID = 80, NEAR = 140;   // parallax travel (px at 1920) of each depth
     static final float SUNRISE = 5.75f, SUNSET = 17.7f;
 
-    // Each weather by day and by night: sky top, sky bottom, far ridges, near ridges.
-    private static final int[][] DAY = {
-        {0xFFF7EFDC, 0xFFF1E5CB, 0xFFC9D5D9, 0xFF1E3443}, {0xFFF4ECDC, 0xFFEFE5D0, 0xFFC6D2D7, 0xFF22384A},
-        {0xFFE4E2DC, 0xFFDAD8D1, 0xFFBCC6CA, 0xFF2A3A46}, {0xFFC9CFD2, 0xFFDADDDC, 0xFFB0BBC1, 0xFF22323E},
-        {0xFF46515C, 0xFF6A747B, 0xFF5C6973, 0xFF0F1922}, {0xFFEFECE5, 0xFFF3F1EB, 0xFFDDE2E4, 0xFF62717C}};
-    private static final int[][] NIGHT = {
-        {0xFF0E1828, 0xFF213048, 0xFF34465C, 0xFF060C14}, {0xFF0F192A, 0xFF22314A, 0xFF33455B, 0xFF070D16},
-        {0xFF1A2230, 0xFF283141, 0xFF354153, 0xFF0A1018}, {0xFF151D29, 0xFF232C3A, 0xFF2F3B4B, 0xFF070C12},
-        {0xFF0B1018, 0xFF171E29, 0xFF242E3B, 0xFF04070B}, {0xFF262E3B, 0xFF343D4B, 0xFF404B5C, 0xFF151C26}};
-    private static final float[] DAY_SUN = {1, 0.95f, 0.3f, 0, 0, 0.45f}, NIGHT_SUN = {1, 0.9f, 0.25f, 0, 0, 0.35f};
-    private static final int[] CLOUDS = {0, 4, 7, 6, 7, 0};
-    private static final float[] TINT = {0, 0.15f, 0.6f, 0.75f, 0.85f, 0.7f};   // how much the weather overrides the time's colors
+    private static final int CLEAR = 0, PARTLY = 1, CLOUDY = 2, RAIN = 3, STORM = 4, FOG = 5;
 
-    // The clear sky through the day. Colors: sky top, sky bottom, far, near, sun top, sun bottom (0: no sun or moon).
-    // Values: moon (1) or sun (0), its strength, x, y, radius (px at 1920), night (0..1), morning mist (1 = usual).
-    private static final float[] HOURS = {0, 4.2f, 5.1f, 5.75f, 7.5f, 12, 15.3f, 16.9f, 17.7f, 18.4f, 19.3f, 24};
-    private static final int[][] COLORS = {
-        {0xFF0E1828, 0xFF213048, 0xFF34465C, 0xFF060C14, 0xFFF6ECD4, 0xFFC8BB9B},
-        {0xFF111B2F, 0xFF29324E, 0xFF39455E, 0xFF09101A, 0xFFF6ECD4, 0xFFC8BB9B},
-        {0xFF2C3557, 0xFF8A7389, 0xFF55566E, 0xFF141826, 0, 0},
-        {0xFFE5B6A3, 0xFFF6DBBF, 0xFFA9AEBF, 0xFF2B3447, 0xFFF4683E, 0xFFF8C9A0},
-        {0xFFC9DCE6, 0xFFF1EEE4, 0xFFB3C8D6, 0xFF264059, 0xFFF57048, 0xFFFBD9B4},
-        {0xFFFCF4D9, 0xFFFAF1DC, 0xFFC3D2D6, 0xFF17293A, 0xFFE5303C, 0xFFF08A6E},
-        {0xFFF7EFDC, 0xFFF1E5CB, 0xFFC9D5D9, 0xFF1E3443, 0xFFF0444A, 0xFFF6CDB8},
-        {0xFFF2D6A4, 0xFFF8E5BE, 0xFFCDB89F, 0xFF3A3038, 0xFFF2803A, 0xFFF9D49A},
-        {0xFFDC8A6E, 0xFFF5BE8B, 0xFFB38B87, 0xFF2B2033, 0xFFE2412E, 0xFFF29A6A},
-        {0xFF29314F, 0xFF86697A, 0xFF4C4C66, 0xFF111522, 0, 0},
-        {0xFF0E1828, 0xFF213048, 0xFF34465C, 0xFF060C14, 0xFFF6ECD4, 0xFFC8BB9B},
-        {0xFF0E1828, 0xFF213048, 0xFF34465C, 0xFF060C14, 0xFFF6ECD4, 0xFFC8BB9B}};
-    private static final float[][] VALUES = {
-        {1, 1.0f, 1250, 210, 80, 1, 1}, {1, 0.7f, 1300, 300, 80, 1, 1}, {0, 0, 1480, 600, 110, 0.8f, 1},
-        {0, 1, 1480, 560, 112, 0.15f, 1}, {0, 1, 1420, 390, 100, 0, 1.5f}, {0, 1, 1200, 130, 72, 0, 0.35f},
-        {0, 1, 1260, 270, 94, 0, 1}, {0, 1, 1380, 440, 104, 0, 1}, {0, 1, 1460, 585, 114, 0.25f, 1},
-        {0, 0, 1460, 640, 114, 0.8f, 1}, {1, 1, 1250, 230, 80, 1, 1}, {1, 1, 1250, 210, 80, 1, 1}};
+    // Fixed keyframe hours across 24h cycle
+    private static final float[] HOURS = {0f, 4.5f, 5.5f, 6.5f, 10.0f, 13.0f, 16.5f, 18.0f, 19.2f, 21.0f, 24.0f};
 
-    // Ridges far to near: base line, height, wave, phase (at 1920x1080); everything above TOP is sky.
-    private static final float[][] RIDGES = {{600, 95, 0.0024f, 0.4f}, {660, 115, 0.0030f, 2.1f}, {730, 135, 0.0036f, 4.0f},
-        {810, 150, 0.0042f, 1.2f}, {890, 160, 0.0048f, 3.3f}, {970, 165, 0.0054f, 5.1f}};
-    private static final float TOP = 400, MARGIN = 160;
-    // The far and middle ridges sit in mist, so they're kept at lower resolution (and scaled up when drawn): less memory.
-    private static final float[] RES = {0.5f, 0.75f, 1};
-    // Soft cloud washes: overlapping ellipses {x, y, rx, ry, opacity} in an 1100x300 box, blurred together once.
-    private static final float[][][] WASHES = {
-        {{560, 150, 420, 70, .55f}, {520, 140, 300, 52, .95f}, {700, 160, 240, 44, .85f}, {330, 168, 200, 34, .7f}},
-        {{540, 150, 400, 64, .55f}, {460, 150, 280, 48, .9f}, {680, 140, 260, 56, .95f}},
-        {{560, 155, 440, 72, .5f}, {600, 145, 320, 54, .95f}, {380, 165, 180, 34, .75f}}};
-    private static final float CLOUD_W = 1100, CLOUD_H = 300, CLOUD_RES = 0.5f;   // blurred anyway: half resolution
-    // Partly cloudy keeps one composition (upper left, right of the sun, two faint ones): x, y, size, opacity.
-    private static final float[][] ANCHORS = {{-260, 10, 1.15f, 1}, {930, 190, 1.25f, 1}, {1250, -60, .8f, .7f}, {380, 330, .9f, .55f}};
-    private static final float[] CLOUD_Y = {20, 230, 120, 420, 20, 300, 160, 380};
-    // Raindrops on the glass: 440 drops and 9 running ones, all stamped from one small drop drawn once (day and night)
-    private static final int GLASS_DROPS = 440, RUNNERS = 9;
-    private final float[] gx = new float[GLASS_DROPS], gy = new float[GLASS_DROPS], gr = new float[GLASS_DROPS], gsq = new float[GLASS_DROPS];
-    private final float[] rx = new float[RUNNERS], rr = new float[RUNNERS], rspeed = new float[RUNNERS], rph = new float[RUNNERS], rwob = new float[RUNNERS];
-    private Bitmap dropDay, dropNight;
-    private final Path trail = new Path();
-    private final Paint trailPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    // Sky colors: top, mid, horizon
+    private static final int[][] SKY_COLORS = {
+        {0xFF060B14, 0xFF0B1628, 0xFF12243C}, // 00:00 Deep midnight
+        {0xFF080F1E, 0xFF101F38, 0xFF18304E}, // 04:30 Pre-dawn navy
+        {0xFF2E193C, 0xFF87385A, 0xFFE87766}, // 05:30 Dawn coral pink
+        {0xFF4A2448, 0xFFD86762, 0xFFFFBE85}, // 06:30 Sunrise peach gold
+        {0xFF1268A8, 0xFF2BB0D4, 0xFF6FE2E4}, // 10:00 Morning tropical turquoise
+        {0xFF1070B2, 0xFF32B4D8, 0xFF7AE6E8}, // 13:00 Midday bright blue
+        {0xFF1A385C, 0xFF7B3858, 0xFFE06C42}, // 16:30 Golden hour
+        {0xFF1E1430, 0xFF7D1E4E, 0xFFFF6C2C}, // 18:00 Sunset amber magenta
+        {0xFF141226, 0xFF352042, 0xFF7A3644}, // 19:12 Dusk twilight
+        {0xFF090E1A, 0xFF0F1A2E, 0xFF14243A}, // 21:00 Nightfall indigo
+        {0xFF060B14, 0xFF0B1628, 0xFF12243C}  // 24:00 Deep midnight
+    };
 
-    /** The look at one moment. */
-    static final class Look {
-        int sky0, sky1, far, near, sun0, sun1;
-        boolean moon, fog;
-        float sunA, sx, sy, sr, night, stars, mist;
-        int clouds;
-    }
+    // Ocean colors: horizon, mid, deep
+    private static final int[][] SEA_COLORS = {
+        {0xFF0A1626, 0xFF07101E, 0xFF040A14}, // Midnight deep sea
+        {0xFF0E1E34, 0xFF091424, 0xFF050C18}, // Pre-dawn sea
+        {0xFF663048, 0xFF2A1C34, 0xFF121020}, // Dawn rosy reflection
+        {0xFF8A4644, 0xFF32364C, 0xFF161E2E}, // Sunrise gold gleam
+        {0xFF168CA6, 0xFF0E5478, 0xFF08324E}, // Morning tropical cyan
+        {0xFF1AA0BC, 0xFF105C84, 0xFF0A3654}, // Midday deep blue
+        {0xFF783E38, 0xFF2E3048, 0xFF141A28}, // Golden hour sea
+        {0xFF9C4028, 0xFF3E243A, 0xFF181422}, // Sunset fiery reflection
+        {0xFF381C2C, 0xFF1A1828, 0xFF0E0E1A}, // Dusk deep sea
+        {0xFF0E1A2C, 0xFF0A1220, 0xFF060B14}, // Nightfall sea
+        {0xFF0A1626, 0xFF07101E, 0xFF040A14}  // Midnight deep sea
+    };
 
-    private final WeatherSky helper;   // its mist and lightning
+    // Shore and palm silhouette colors: sand base, wet sand, palm silhouette
+    private static final int[][] SHORE_COLORS = {
+        {0xFF161E2A, 0xFF0E141E, 0xFF080D14}, // Midnight
+        {0xFF1A2230, 0xFF121824, 0xFF0A0F18}, // Pre-dawn
+        {0xFF7C5A56, 0xFF583A3C, 0xFF281822}, // Dawn
+        {0xFFC28E70, 0xFF8A5C50, 0xFF341C24}, // Sunrise
+        {0xFFDFC088, 0xFFB4925C, 0xFF14281E}, // Morning
+        {0xFFE2C48E, 0xFFBA9662, 0xFF162C20}, // Midday
+        {0xFFC48E66, 0xFF8E5C46, 0xFF2E1C22}, // Golden hour
+        {0xFFB86644, 0xFF7A3E34, 0xFF24121A}, // Sunset
+        {0xFF422834, 0xFF2C1A24, 0xFF140C12}, // Dusk
+        {0xFF1C222E, 0xFF121620, 0xFF0A0E16}, // Nightfall
+        {0xFF161E2A, 0xFF0E141E, 0xFF080D14}  // Midnight
+    };
+
+    // Rainy/storm moody palette blend targets
+    private static final int[] RAIN_SKY = {0xFF1E2834, 0xFF283442, 0xFF3A4856};
+    private static final int[] RAIN_SEA = {0xFF26323E, 0xFF1A242E, 0xFF10161E};
+    private static final int[] RAIN_SHORE = {0xFF38404A, 0xFF283038, 0xFF14181E};
+
+    private final WeatherSky helper;
     private int w, h;
-    private float k = 1;
-    private final Look look = new Look();
-    private static final Look scratch = new Look();   // night(), on the main thread
-    private static final float[] DEPTH = {FAR, MID, NEAR};
-    private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG), bitmapPaint = new Paint(Paint.FILTER_BITMAP_FLAG | Paint.ANTI_ALIAS_FLAG);
-    private final Paint rainNear = new Paint(Paint.ANTI_ALIAS_FLAG), rainFar = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final RectF dst = new RectF();
-    private final Path disc = new Path(), band = new Path();
-    private float[] stars = new float[0];
-    private final float[] cloudY = new float[8], cloudLen = new float[8], cloudTh = new float[8], cloudDur = new float[8], cloudPh = new float[8];
-    private static final int DROPS = 230;
-    private final float[] dropX = new float[DROPS], dropPhase = new float[DROPS], dropLen = new float[DROPS], dropSpeed = new float[DROPS];
-    private final boolean[] dropNear = new boolean[DROPS];
-    private final float[] nearLines = new float[DROPS * 4], farLines = new float[DROPS * 4];
+    private float k = 1f;
 
-    // The sky and sun shaders, rebuilt each minute of the day.
-    private long shaderKey = -1;
-    private LinearGradient skyGradient, sunGradient;
-    private RadialGradient sunGlow;
+    private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint strokePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint fishPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint rainFgPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint rainBgPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Path path = new Path();
+    private final Path path2 = new Path();
+    private final Path fishPath = new Path();
+    private final RectF rectF = new RectF();
 
-    // The mountains (3 depths) and clouds (3 shapes) for a weather and time; the next set is drawn on a worker thread.
-    private static final class Art {
-        long key;
-        float width, height;   // drawn size of the ridge bitmaps
-        Bitmap[] ridges = new Bitmap[3], clouds = new Bitmap[3];
-        void recycle() {
-            for (Bitmap b : ridges) if (b != null) b.recycle();
-            for (Bitmap b : clouds) if (b != null) b.recycle();
-        }
-    }
-    private Art art, fading;
-    private long fadeAt;
-    private final Object lock = new Object();
-    private Art ready;                              // guarded by lock
-    private volatile long buildingKey = -1;
+    // Interactive School of Fish
+    private static final int FISH_COUNT = 8;
+    private float schoolX = 600f, schoolY = 700f;
+    private float targetFacingX = 1.0f; // +1.0 = swimming right, -1.0 = swimming left
+    private float targetPitch = 0.0f; // radians, negative = up, positive = down
+    private float schoolVx = 75f;
+    private float schoolVy = 0f;
+    private float schoolSpeed = 75f; // px/s
+    private float cruiseSpeed = 75f;
+    private long lastDrawMs = 0L;
+
+    private final float[] fishOffX = new float[FISH_COUNT];
+    private final float[] fishOffY = new float[FISH_COUNT];
+    private final float[] fishScale = new float[FISH_COUNT];
+    private final float[] fishWigglePhase = new float[FISH_COUNT];
+
+    private final float[] fishPosX = new float[FISH_COUNT];
+    private final float[] fishPosY = new float[FISH_COUNT];
+    private final float[] fishFacing = new float[FISH_COUNT];
+    private final float[] fishPitch = new float[FISH_COUNT];
+
+    // Stars
+    private static final int STAR_COUNT = 72;
+    private final float[] starX = new float[STAR_COUNT];
+    private final float[] starY = new float[STAR_COUNT];
+    private final float[] starRadius = new float[STAR_COUNT];
+    private final float[] starPhase = new float[STAR_COUNT];
+
+    // Rain particles: two depth layers for crisp visual fidelity
+    private static final int RAIN_COUNT = 150;
+    private final float[] rainX = new float[RAIN_COUNT];
+    private final float[] rainPhase = new float[RAIN_COUNT];
+    private final float[] rainSpeed = new float[RAIN_COUNT];
+    private final float[] rainLen = new float[RAIN_COUNT];
+    private final boolean[] rainIsFg = new boolean[RAIN_COUNT];
+    private final float[] rainFgLines = new float[RAIN_COUNT * 4];
+    private final float[] rainBgLines = new float[RAIN_COUNT * 4];
+
+    // Wind wisps
+    private static final int WISP_COUNT = 5;
+    private final float[] wispY = new float[WISP_COUNT];
+    private final float[] wispSpeed = new float[WISP_COUNT];
+    private final float[] wispPhase = new float[WISP_COUNT];
+    private final float[] wispLen = new float[WISP_COUNT];
+
+    // Current interpolated state
+    private int curSky0, curSky1, curSky2;
+    private int curSea0, curSea1, curSea2;
+    private int curSand0, curSand1, curPalm;
+    private float curSunX, curSunY, curSunR, curSunAlpha;
+    private boolean isMoon;
+    private float curNightFactor;
+    private float curSunStrength;
+    private float effectiveHour = 12f;
 
     InkSky(WeatherSky helper) {
         this.helper = helper;
-        fill.setStyle(Paint.Style.FILL);
-        rainNear.setStrokeCap(Paint.Cap.ROUND);
-        rainFar.setStrokeCap(Paint.Cap.ROUND);
-        Random r = new Random(5);
-        for (int i = 0; i < 8; i++) {
-            cloudY[i] = CLOUD_Y[i] + r.nextFloat() * 30;
-            cloudLen[i] = 0.85f + r.nextFloat() * 0.7f;
-            cloudTh[i] = 0.6f + r.nextFloat() * 0.7f;
-            cloudDur[i] = 160 + r.nextFloat() * 120;
-            cloudPh[i] = r.nextFloat();
+        strokePaint.setStyle(Paint.Style.STROKE);
+        fishPaint.setStyle(Paint.Style.FILL);
+        rainFgPaint.setStyle(Paint.Style.STROKE);
+        rainFgPaint.setStrokeCap(Paint.Cap.ROUND);
+        rainBgPaint.setStyle(Paint.Style.STROKE);
+        rainBgPaint.setStrokeCap(Paint.Cap.ROUND);
+
+        Random r = new Random(1024);
+        for (int i = 0; i < STAR_COUNT; i++) {
+            starX[i] = r.nextFloat();
+            starY[i] = r.nextFloat() * 0.50f;
+            starRadius[i] = 0.8f + r.nextFloat() * 1.6f;
+            starPhase[i] = r.nextFloat() * 6.28f;
         }
-        Random g = new Random(77);
-        for (int i = 0; i < GLASS_DROPS; i++) {
-            float u = g.nextFloat();
-            gr[i] = u < 0.5f ? 3 + g.nextFloat() * 3.5f : u < 0.88f ? 6.5f + g.nextFloat() * 6 : 12.5f + g.nextFloat() * 10;
-            gx[i] = g.nextFloat() * 1920;
-            gy[i] = g.nextFloat() * 1080;
-            gsq[i] = 0.92f + g.nextFloat() * 0.22f;
+
+        Random rnd = new Random(42);
+        for (int i = 0; i < RAIN_COUNT; i++) {
+            rainX[i] = rnd.nextFloat();
+            rainPhase[i] = rnd.nextFloat();
+            rainSpeed[i] = 1900f + rnd.nextFloat() * 1300f;
+            rainLen[i] = 38f + rnd.nextFloat() * 38f;
+            rainIsFg[i] = rnd.nextFloat() < 0.35f;
         }
-        for (int i = 0; i < RUNNERS; i++) {
-            rx[i] = 60 + g.nextFloat() * 1800;
-            rr[i] = 8 + g.nextFloat() * 6;
-            rspeed[i] = 35 + g.nextFloat() * 80;
-            rph[i] = g.nextFloat();
-            rwob[i] = g.nextFloat() * 6;
+
+        for (int i = 0; i < WISP_COUNT; i++) {
+            wispY[i] = 0.15f + i * 0.12f + (rnd.nextFloat() - 0.5f) * 0.05f;
+            wispSpeed[i] = 55f + rnd.nextFloat() * 45f;
+            wispPhase[i] = rnd.nextFloat() * 6.28f;
+            wispLen[i] = 120f + rnd.nextFloat() * 100f;
         }
-        trailPaint.setStyle(Paint.Style.STROKE);
-        trailPaint.setStrokeCap(Paint.Cap.ROUND);
-        trailPaint.setStrokeJoin(Paint.Join.ROUND);
+
+        // Initialize schooling formation offsets
+        float[] baseOffsetsX = {0f, -42f, -50f, -86f, -95f, -135f, -145f, -170f};
+        float[] baseOffsetsY = {0f, -22f, 26f, -38f, 32f, -16f, 44f, 8f};
+        for (int i = 0; i < FISH_COUNT; i++) {
+            fishOffX[i] = baseOffsetsX[i];
+            fishOffY[i] = baseOffsetsY[i];
+            fishScale[i] = 0.85f + rnd.nextFloat() * 0.30f;
+            fishWigglePhase[i] = rnd.nextFloat() * 6.28f;
+            fishFacing[i] = 1.0f;
+            fishPitch[i] = 0.0f;
+        }
     }
 
     void setSize(int width, int height) {
         if (width == w && height == h) return;
-        w = width;
-        h = height;
-        k = w / 1920f;
-        shaderKey = -1;
-        if (art != null) art.recycle();
-        if (fading != null) fading.recycle();
-        art = fading = null;
-        Random r = new Random(5);
-        stars = new float[70 * 4];
-        for (int i = 0; i < stars.length; i += 4) {
-            stars[i] = r.nextFloat() * w;
-            stars[i + 1] = r.nextFloat() * h * 0.42f;
-            stars[i + 2] = 0.6f + r.nextFloat() * 0.9f;
-            stars[i + 3] = r.nextFloat() * 6;
+        this.w = width;
+        this.h = height;
+        this.k = width / 1920f;
+        this.schoolX = width * 0.40f;
+        this.schoolY = height * 0.68f;
+        this.cruiseSpeed = 75f * k;
+        this.schoolSpeed = cruiseSpeed;
+        this.schoolVx = cruiseSpeed;
+        this.schoolVy = 0f;
+        this.targetFacingX = 1.0f;
+        this.targetPitch = 0.0f;
+        for (int i = 0; i < FISH_COUNT; i++) {
+            fishPosX[i] = schoolX - Math.abs(fishOffX[i]) * k;
+            fishPosY[i] = schoolY + fishOffY[i] * k;
+            fishFacing[i] = 1.0f;
+            fishPitch[i] = 0.0f;
         }
-        Random d = new Random(29);
-        for (int i = 0; i < DROPS; i++) {
-            dropNear[i] = d.nextFloat() < 0.3f;
-            dropX[i] = d.nextFloat() * (w + 300 * k);
-            dropPhase[i] = d.nextFloat();
-            dropLen[i] = ((dropNear[i] ? 90 : 50) + d.nextFloat() * (dropNear[i] ? 60 : 40)) * k;
-            dropSpeed[i] = (dropNear[i] ? 2600 : 1600) * (0.85f + d.nextFloat() * 0.3f) * k;
-        }
-        rainNear.setStrokeWidth(Math.max(0.8f, 1.8f * k));
-        rainFar.setStrokeWidth(Math.max(0.8f, 1.2f * k));
     }
 
-    /** Frees the mountains and clouds (the home screen going away, e.g. for the screensaver); drawn again when needed. */
     void release() {
-        if (art != null) art.recycle();
-        if (fading != null) fading.recycle();
-        art = fading = null;
-        synchronized (lock) {
-            if (ready != null) ready.recycle();
-            ready = null;
-        }
+        // Pure procedural canvas drawing without persistent heavy bitmaps
     }
 
-    // MARK: - Time of day
-
-    /** The hour on this wallpaper's fixed day for a real hour, given today's real sunrise and sunset (hours). */
     static float canonical(float hour, float rise, float set) {
-        if (!(set > rise + 6)) return hour;
+        if (!(set > rise + 6f)) return hour;
         float c;
         if (hour >= rise && hour <= set) c = SUNRISE + (hour - rise) / (set - rise) * (SUNSET - SUNRISE);
         else if (hour > set) c = SUNSET + (hour - set);
         else c = SUNRISE - (rise - hour);
-        return ((c % 24) + 24) % 24;
+        return ((c % 24f) + 24f) % 24f;
     }
 
-    /** How much night (0 by day, 1 at night) at this hour of the fixed day. */
     static float night(float hour) {
-        time(hour, scratch);
-        return scratch.night;
+        float h = ((hour % 24f) + 24f) % 24f;
+        if (h >= 19.5f || h <= 4.8f) return 1f;
+        if (h >= 6.8f && h <= 17.0f) return 0f;
+        if (h < 6.8f) return 1f - (h - 4.8f) / 2.0f;
+        return (h - 17.0f) / 2.5f;
     }
 
-    /** The clear sky at an hour, eased between the keyframes. */
-    private static void time(float hour, Look out) {
-        hour = ((hour % 24) + 24) % 24;
-        int i = 0;
-        while (HOURS[i + 1] <= hour) i++;
-        float t = (hour - HOURS[i]) / (HOURS[i + 1] - HOURS[i]), e = t * t * (3 - 2 * t);
-        int[] a = COLORS[i], b = COLORS[i + 1];
-        float[] va = VALUES[i], vb = VALUES[i + 1];
-        out.sky0 = blend(a[0], b[0], e);
-        out.sky1 = blend(a[1], b[1], e);
-        out.far = blend(a[2], b[2], e);
-        out.near = blend(a[3], b[3], e);
-        boolean sunA = a[4] != 0, sunB = b[4] != 0, sameKind = va[0] == vb[0];
-        boolean useA = sunA && sunB ? e < 0.5f : sunA;
-        if (sunA && sunB && sameKind) {
-            out.sun0 = blend(a[4], b[4], e);
-            out.sun1 = blend(a[5], b[5], e);
-        } else {
-            out.sun0 = useA ? a[4] : b[4];
-            out.sun1 = useA ? a[5] : b[5];
-        }
-        out.moon = (useA ? va[0] : vb[0]) > 0.5f;
-        out.sunA = sunA && sunB && !sameKind ? Math.abs(1 - 2 * e) * (e < 0.5f ? va[1] : vb[1]) : va[1] + (vb[1] - va[1]) * e;
-        out.sx = va[2] + (vb[2] - va[2]) * e;
-        out.sy = va[3] + (vb[3] - va[3]) * e;
-        out.sr = va[4] + (vb[4] - va[4]) * e;
-        out.night = va[5] + (vb[5] - va[5]) * e;
-        out.mist = va[6] + (vb[6] - va[6]) * e;
-    }
-
-    /** The look for a weather (WeatherSky kind) at an hour: the time's sky, tinted toward that weather. */
-    private static void look(int kind, float hour, Look out) {
-        time(hour, out);
-        float n = out.night, s = TINT[kind];
-        int[] d = DAY[kind], q = NIGHT[kind];
-        out.sky0 = blend(out.sky0, blend(d[0], q[0], n), s);
-        out.sky1 = blend(out.sky1, blend(d[1], q[1], n), s);
-        out.far = blend(out.far, blend(d[2], q[2], n), s);
-        out.near = blend(out.near, blend(d[3], q[3], n), s);
-        if (out.sun0 != 0 && !out.moon && (kind == CLOUDY || kind == FOG)) {
-            out.sun0 = blend(out.sun0, 0xFFF3E8D0, 0.75f);
-            out.sun1 = blend(out.sun1, 0xFFEDE4D2, 0.6f);
-        }
-        out.sunA *= n >= 0.5f ? NIGHT_SUN[kind] : DAY_SUN[kind];
-        out.stars = n > 0.6f && kind <= PARTLY ? (n - 0.6f) / 0.4f : 0;
-        out.clouds = CLOUDS[kind];
-        out.fog = kind == FOG;
-        if (kind > PARTLY) out.mist = 1;
-    }
-
-    /** The color the glass (shelf, drawer) should take: the misty mountains behind it. */
     int glassColor(int code, float hour) {
-        Look l = new Look();
-        look(WeatherSky.kind(code), hour, l);
-        return blend(blend(l.far, l.near, 0.45f), l.sky1, 0.35f);
+        computeLighting(WeatherSky.kind(code), hour);
+        int base = blend(curSea1, curSky1, 0.35f);
+        return (base & 0x00FFFFFF) | 0xDD000000;
     }
 
-    // MARK: - Drawing
-
-    /** Draws the wallpaper for a weather code at an hour of the fixed day; `parallax` -1..1; without `motion`, still. */
-    /**
-     * Where the sun or the moon is in the last drawn sky (px), for the glass's light; false without one (cloudy days
-     * keep a faint sun, which still counts).
-     */
     boolean light(float[] out) {
-        if (look.sun0 == 0 || look.sunA <= 0.02f) return false;
-        out[0] = look.sx * k;
-        out[1] = look.sy * k;
+        if (curSunAlpha <= 0.03f) return false;
+        out[0] = curSunX;
+        out[1] = curSunY;
         return true;
     }
 
-    /** How strong the sun or the moon is (0 to 1), for the light it throws on the glass. */
     float lightStrength() {
-        return Math.min(1, look.sunA);
+        return curSunStrength;
+    }
+
+    /** Directs the school of fish to swim in the direction of the remote D-Pad navigation. */
+    void onDpad(float dx, float dy) {
+        if (dx < 0) {
+            targetFacingX = -1.0f; // Swim left
+            targetPitch = 0.0f;
+            schoolSpeed = 240f * k;
+        } else if (dx > 0) {
+            targetFacingX = 1.0f; // Swim right
+            targetPitch = 0.0f;
+            schoolSpeed = 240f * k;
+        }
+
+        if (dy < 0) {
+            // Swim upward towards upper sea layers with natural gentle tilt (~18 degrees)
+            targetPitch = -0.32f;
+            schoolSpeed = 220f * k;
+        } else if (dy > 0) {
+            // Swim downward towards ocean depths with natural gentle tilt (~18 degrees)
+            targetPitch = 0.32f;
+            schoolSpeed = 220f * k;
+        }
     }
 
     void draw(Canvas c, int code, float hour, long ms, float parallax, boolean motion) {
-        if (w == 0) return;
-        // Drizzle: the cloudy sky, with just a sprinkle of small drops on the glass (no rain falling outside)
-        boolean drizzle = code >= 51 && code <= 57;
-        int kind = drizzle ? CLOUDY : WeatherSky.kind(code);
-        float t = motion ? (ms % 3_600_000L) / 1000f : 0;
-        look(kind, hour, look);
-        boolean night = look.night >= 0.5f;
+        draw(c, code, hour, ms, parallax, 0f, motion);
+    }
 
-        // The mountains and clouds: the set for this weather and 6-minute step, drawn on a worker thread.
-        long key = w * 1_000_000L + kind * 1000L + Math.round(hour * 10);
-        takeReady();
-        if (art == null) {
-            art = build(key, kind, hour);   // the first time, straight away
-        } else if (art.key != key && buildingKey != key) {
-            buildingKey = key;
-            final int bk = kind;
-            final float bh = hour;
-            new Thread(() -> {
-                Art a = build(key, bk, bh), old;
-                synchronized (lock) {
-                    old = ready;   // never taken by the main thread (it takes and clears under the lock)
-                    ready = a;
-                }
-                if (old != null) old.recycle();
-                buildingKey = -1;
-            }, "InkSky").start();
+    void draw(Canvas c, int code, float hour, long ms, float parallaxX, float parallaxY, boolean motion) {
+        if (w == 0 || h == 0) return;
+        int kind = WeatherSky.kind(code);
+        boolean isRaining = kind == RAIN || kind == STORM || (code >= 51 && code <= 57);
+        float time = motion ? (ms % 3_600_000L) / 1000f : 0f;
+
+        // Smooth time delta for fish swimming physics
+        float dt = lastDrawMs > 0 ? (ms - lastDrawMs) / 1000f : 0.016f;
+        if (dt > 0.1f) dt = 0.1f;
+        lastDrawMs = ms;
+
+        // Update fish swimming physics
+        if (motion) {
+            updateFishSchool(dt, time);
         }
 
-        // Sky
-        long sk = kind * 10000L + Math.round(hour * 60);
-        if (sk != shaderKey) {
-            shaderKey = sk;
-            skyGradient = new LinearGradient(0, 0, 0, h * 0.62f, look.sky0, look.sky1, Shader.TileMode.CLAMP);
-            if (look.sun0 != 0) {
-                float x = look.sx * k, y = look.sy * k, r = look.sr * k;
-                sunGlow = new RadialGradient(x, y, r * 3, new int[] {Ui.alpha(look.sun0, look.moon ? 0.2f : 0.16f), Ui.alpha(look.sun0, look.moon ? 0.2f : 0.16f), look.sun0 & 0x00FFFFFF},
-                        new float[] {0, 0.27f, 1}, Shader.TileMode.CLAMP);
-                sunGradient = new LinearGradient(0, y - r, 0, y + r, new int[] {look.sun0, blend(look.sun0, look.sun1, 0.3f),
-                        blend(look.sun1, look.sky1, look.moon ? 0 : 0.25f)}, new float[] {0, 0.5f, 1}, Shader.TileMode.CLAMP);
+        computeLighting(kind, hour);
+
+        float horizonY = h * 0.52f;
+        float skyParallaxX = -parallaxX * 18f * k;
+        float skyParallaxY = -parallaxY * 10f * k;
+
+        // 1. Sky gradient
+        drawSky(c, horizonY + skyParallaxY * 0.4f);
+
+        // 2. Stars at night
+        if (curNightFactor > 0.05f) {
+            drawStars(c, time, skyParallaxX, skyParallaxY, horizonY);
+        }
+
+        // 3. Sun or Moon rising/setting from ocean horizon
+        drawCelestialBody(c, horizonY, skyParallaxX * 0.5f, skyParallaxY * 0.5f, time);
+
+        // 4. Subtle wind wisps in upper sky
+        if (motion) {
+            drawWindWisps(c, time, skyParallaxX * 0.7f, skyParallaxY * 0.5f);
+        }
+
+        // 5. Lightning flash in storm
+        if (kind == STORM && helper != null) {
+            helper.drawLightning(c, time, skyParallaxX);
+        }
+
+        // 6. Layered animated ocean waves & school of fish swimming through the water
+        drawOcean(c, horizonY, parallaxX, parallaxY, time, isRaining);
+
+        // 7. Coastal beach shoreline & coconut palms (completely static and peaceful)
+        drawShoreAndPalms(c, time, isRaining);
+
+        // 8. Rain streaks overlay: luminous silver-white contrast across all daylight and night states
+        if (isRaining) {
+            drawRain(c, time, kind == STORM, -parallaxX * 60f * k);
+        }
+    }
+
+    private void updateFishSchool(float dt, float time) {
+        // Ease speed back down to cruising speed
+        if (schoolSpeed > cruiseSpeed) {
+            schoolSpeed -= (schoolSpeed - cruiseSpeed) * Math.min(1f, dt * 2.2f);
+        }
+
+        if (Math.abs(targetPitch) > 0.01f) {
+            targetPitch -= targetPitch * Math.min(1f, dt * 0.9f);
+        }
+        float ambientPitch = targetPitch + (float) Math.sin(time * 1.4f) * 0.04f;
+
+        // Hydrodynamic velocity interpolation (fluid deceleration and acceleration)
+        float targetVx = targetFacingX * schoolSpeed;
+        float targetVy = (float) Math.sin(ambientPitch) * schoolSpeed;
+        schoolVx += (targetVx - schoolVx) * Math.min(1f, dt * 3.4f);
+        schoolVy += (targetVy - schoolVy) * Math.min(1f, dt * 3.8f);
+
+        schoolX += schoolVx * dt;
+        schoolY += schoolVy * dt;
+
+        // Boundary containment
+        float horizonY = h * 0.52f;
+        float topBound = horizonY + 45f * k;
+        float bottomBound = h * 0.88f;
+
+        if (schoolY < topBound) {
+            schoolY = topBound;
+            targetPitch = 0.25f;
+        } else if (schoolY > bottomBound) {
+            schoolY = bottomBound;
+            targetPitch = -0.25f;
+        }
+
+        // Horizontal wrap-around
+        float pad = 200f * k;
+        if (schoolX > w + pad) {
+            schoolX = -pad * 0.5f;
+            float shiftR = (w + pad * 1.5f);
+            for (int j = 0; j < FISH_COUNT; j++) fishPosX[j] -= shiftR;
+        } else if (schoolX < -pad) {
+            schoolX = w + pad * 0.5f;
+            float shiftL = (w + pad * 1.5f);
+            for (int j = 0; j < FISH_COUNT; j++) fishPosX[j] += shiftL;
+        }
+
+        // Cascading follower physics and 3D yaw turning across the school
+        for (int i = 0; i < FISH_COUNT; i++) {
+            float targetFx = schoolX - (targetFacingX * Math.abs(fishOffX[i]) * k);
+            float targetFy = schoolY + fishOffY[i] * k;
+
+            float followSpeed = 5.2f - i * 0.32f;
+            fishPosX[i] += (targetFx - fishPosX[i]) * Math.min(1f, dt * followSpeed);
+            fishPosY[i] += (targetFy - fishPosY[i]) * Math.min(1f, dt * 5.5f);
+
+            // Staggered 3D yaw turning rate: leader turns first, followers follow
+            float turnRate = 6.2f - i * 0.45f;
+            fishFacing[i] += (targetFacingX - fishFacing[i]) * Math.min(1f, dt * turnRate);
+
+            // Staggered pitch easing
+            fishPitch[i] += (ambientPitch - fishPitch[i]) * Math.min(1f, dt * (5.5f - i * 0.25f));
+        }
+    }
+
+    private void computeLighting(int kind, float hour) {
+        effectiveHour = hour;
+        float hNorm = ((hour % 24f) + 24f) % 24f;
+        int idx = 0;
+        while (idx < HOURS.length - 2 && HOURS[idx + 1] <= hNorm) {
+            idx++;
+        }
+        float span = HOURS[idx + 1] - HOURS[idx];
+        float t = span > 0.001f ? (hNorm - HOURS[idx]) / span : 0f;
+        float ease = t * t * (3f - 2f * t);
+
+        int[] skyA = SKY_COLORS[idx], skyB = SKY_COLORS[idx + 1];
+        curSky0 = blend(skyA[0], skyB[0], ease);
+        curSky1 = blend(skyA[1], skyB[1], ease);
+        curSky2 = blend(skyA[2], skyB[2], ease);
+
+        int[] seaA = SEA_COLORS[idx], seaB = SEA_COLORS[idx + 1];
+        curSea0 = blend(seaA[0], seaB[0], ease);
+        curSea1 = blend(seaA[1], seaB[1], ease);
+        curSea2 = blend(seaA[2], seaB[2], ease);
+
+        int[] shoreA = SHORE_COLORS[idx], shoreB = SHORE_COLORS[idx + 1];
+        curSand0 = blend(shoreA[0], shoreB[0], ease);
+        curSand1 = blend(shoreA[1], shoreB[1], ease);
+        curPalm = blend(shoreA[2], shoreB[2], ease);
+
+        curNightFactor = night(hNorm);
+
+        // Weather tinting (rain / storm / cloud desaturation)
+        float weatherTint = kind == STORM ? 0.75f : kind == RAIN ? 0.65f : kind == CLOUDY ? 0.40f : 0f;
+        if (weatherTint > 0f) {
+            curSky0 = blend(curSky0, RAIN_SKY[0], weatherTint);
+            curSky1 = blend(curSky1, RAIN_SKY[1], weatherTint);
+            curSky2 = blend(curSky2, RAIN_SKY[2], weatherTint);
+            curSea0 = blend(curSea0, RAIN_SEA[0], weatherTint);
+            curSea1 = blend(curSea1, RAIN_SEA[1], weatherTint);
+            curSea2 = blend(curSea2, RAIN_SEA[2], weatherTint);
+            curSand0 = blend(curSand0, RAIN_SHORE[0], weatherTint);
+            curSand1 = blend(curSand1, RAIN_SHORE[1], weatherTint);
+            curPalm = blend(curPalm, RAIN_SHORE[2], weatherTint);
+        }
+
+        // Sun / Moon trajectory: placed safely in center and center-right open sky to prevent overlapping text
+        float horizonY = h * 0.52f;
+        if (hNorm >= 5.0f && hNorm <= 19.2f) {
+            isMoon = false;
+            float sunProg = (hNorm - 5.0f) / 14.2f;
+            curSunX = w * (0.50f + 0.22f * sunProg);
+            float arc = (float) Math.sin(sunProg * Math.PI);
+            curSunY = horizonY - arc * (h * 0.38f) + (1.0f - arc) * (18f * k);
+            curSunR = (46f + (1.0f - arc) * 12f) * k;
+            curSunAlpha = Math.min(1f, arc * 1.5f + 0.15f);
+            curSunStrength = arc;
+        } else {
+            isMoon = true;
+            float moonHour = hNorm >= 19.2f ? hNorm - 19.2f : hNorm + 4.8f;
+            float moonProg = moonHour / 9.8f;
+            curSunX = w * (0.50f + 0.20f * moonProg);
+            float arc = (float) Math.sin(moonProg * Math.PI);
+            curSunY = horizonY - arc * (h * 0.38f) + (1.0f - arc) * (14f * k);
+            curSunR = 36f * k;
+            curSunAlpha = Math.min(1f, arc * 1.4f + 0.2f);
+            curSunStrength = arc * 0.65f;
+        }
+    }
+
+    private void drawSky(Canvas c, float horizonY) {
+        paint.setStyle(Paint.Style.FILL);
+        paint.setShader(new LinearGradient(
+            0, 0, 0, horizonY + 2f,
+            new int[]{curSky0, curSky1, curSky2},
+            new float[]{0f, 0.55f, 1f},
+            Shader.TileMode.CLAMP
+        ));
+        c.drawRect(0, 0, w, horizonY + 2f, paint);
+        paint.setShader(null);
+    }
+
+    private void drawStars(Canvas c, float time, float pX, float pY, float horizonY) {
+        paint.setStyle(Paint.Style.FILL);
+        float baseAlpha = curNightFactor;
+        for (int i = 0; i < STAR_COUNT; i++) {
+            float sx = (starX[i] * w + pX) % w;
+            if (sx < 0) sx += w;
+            float sy = starY[i] * h + pY;
+            if (sy >= horizonY - 10f * k) continue;
+            float twinkle = 0.4f + 0.6f * (0.5f + 0.5f * (float) Math.sin(time * 2.2f + starPhase[i]));
+            int alpha = Math.round(255f * baseAlpha * twinkle);
+            if (alpha <= 0) continue;
+            paint.setColor((0xFFF6F8FF & 0x00FFFFFF) | (alpha << 24));
+            c.drawCircle(sx, sy, starRadius[i] * k, paint);
+        }
+    }
+
+    private void drawCelestialBody(Canvas c, float horizonY, float pX, float pY, float time) {
+        float x = curSunX + pX;
+        float y = curSunY + pY;
+        float r = curSunR;
+        float alpha = curSunAlpha;
+        if (alpha <= 0.01f) return;
+
+        // Radial atmospheric glow
+        int glowColor = isMoon ? 0xFFE0ECFF : (curNightFactor > 0.3f ? 0xFFFF7A38 : 0xFFFFEE99);
+        paint.setStyle(Paint.Style.FILL);
+        paint.setShader(new RadialGradient(
+            x, y, r * 3.4f,
+            new int[]{Ui.alpha(glowColor, alpha * 0.45f), Ui.alpha(glowColor, alpha * 0.12f), glowColor & 0x00FFFFFF},
+            new float[]{0f, 0.40f, 1f},
+            Shader.TileMode.CLAMP
+        ));
+        c.drawCircle(x, y, r * 3.4f, paint);
+        paint.setShader(null);
+
+        // Core celestial disc
+        if (!isMoon) {
+            int sunTop = blend(0xFFFFFDF0, 0xFFFFE4A0, curNightFactor);
+            int sunBottom = blend(0xFFFFB04A, 0xFFE64228, curNightFactor);
+            paint.setShader(new LinearGradient(x, y - r, x, y + r, sunTop, sunBottom, Shader.TileMode.CLAMP));
+            c.drawCircle(x, y, r, paint);
+            paint.setShader(null);
+        } else {
+            // Moon disc with crater shading
+            paint.setColor(Ui.alpha(0xFFF2F6FF, alpha));
+            c.drawCircle(x, y, r, paint);
+            paint.setColor(Ui.alpha(0xFFCBD6E8, alpha * 0.55f));
+            c.drawCircle(x - r * 0.28f, y - r * 0.15f, r * 0.26f, paint);
+            c.drawCircle(x + r * 0.22f, y + r * 0.24f, r * 0.22f, paint);
+            c.drawCircle(x - r * 0.05f, y + r * 0.32f, r * 0.16f, paint);
+        }
+    }
+
+    private void drawWindWisps(Canvas c, float time, float pX, float pY) {
+        strokePaint.setStyle(Paint.Style.STROKE);
+        strokePaint.setStrokeCap(Paint.Cap.ROUND);
+        strokePaint.setStrokeWidth(1.4f * k);
+        int wispColor = isMoon ? 0x1AE0ECFF : 0x22FFFFFF;
+        strokePaint.setColor(wispColor);
+
+        for (int i = 0; i < WISP_COUNT; i++) {
+            float speed = wispSpeed[i] * k;
+            float wx = ((time * speed + wispPhase[i] * 300f + pX) % (w + 400f * k)) - 200f * k;
+            float wy = wispY[i] * h + pY + (float) Math.sin(wx * 0.003f + time * 0.8f + i) * 12f * k;
+            float len = wispLen[i] * k;
+
+            path.reset();
+            path.moveTo(wx, wy);
+            path.quadTo(wx + len * 0.5f, wy - 8f * k, wx + len, wy + (float) Math.sin(time + i) * 6f * k);
+            c.drawPath(path, strokePaint);
+        }
+    }
+
+    private void drawOcean(Canvas c, float horizonY, float pX, float pY, float time, boolean rain) {
+        float chop = rain ? 1.45f : 1.0f;
+        float speed = rain ? 1.4f : 1.0f;
+
+        float parHorizonY = horizonY - pY * 6f * k;
+
+        // 1. Distant base sea
+        paint.setStyle(Paint.Style.FILL);
+        paint.setShader(new LinearGradient(
+            0, parHorizonY, 0, h,
+            new int[]{curSea0, curSea1, curSea2},
+            new float[]{0f, 0.40f, 1f},
+            Shader.TileMode.CLAMP
+        ));
+        c.drawRect(0, parHorizonY, w, h, paint);
+        paint.setShader(null);
+
+        // 2. Celestial reflection corridor
+        drawReflectionPath(c, parHorizonY, pX, time);
+
+        // 3. Layer 1: Distant subtle wave ripples (peaceful, rhythmic 60 FPS motion)
+        drawWaveLayer(c, parHorizonY + 16f * k, 0.006f, 3.5f * k * chop,
+            time * 1.1f * speed, 0f, curSea0, 0.40f, -pX * 14f * k, false);
+
+        // 4. Interactive School of Fish swimming in the mid-depths
+        drawFishSchool(c, time);
+
+        // 5. Layer 2: Midground ocean swell
+        drawWaveLayer(c, parHorizonY + h * 0.12f, 0.0042f, 8.5f * k * chop,
+            time * 1.5f * speed, 1.8f, curSea1, 0.70f, -pX * 28f * k, true);
+
+        // 6. Layer 3: Foreground surf roll
+        drawWaveLayer(c, parHorizonY + h * 0.26f, 0.0028f, 14.0f * k * chop,
+            time * 1.9f * speed, 3.6f, curSea2, 0.95f, -pX * 45f * k, true);
+    }
+
+    /**
+     * Renders an interactive school of vector fish gliding through the ocean water,
+     * undulating their tails and swimming in the direction of the user's remote D-Pad navigation.
+     */
+    private void drawFishSchool(Canvas c, float time) {
+        // Compute fish colors matching current time-of-day lighting
+        int fishBodyColor, fishSheenColor;
+        if (isMoon) {
+            fishBodyColor = 0x88B0D8F8; // Bioluminescent silver-cyan
+            fishSheenColor = 0xC0E4F4FF;
+        } else if (effectiveHour >= 16.0f && effectiveHour <= 19.2f) {
+            fishBodyColor = 0x99F6B894; // Sunset coral glow
+            fishSheenColor = 0xC8FFE2CE;
+        } else if (effectiveHour >= 5.0f && effectiveHour < 7.0f) {
+            fishBodyColor = 0x90F2C2B8; // Sunrise peach-rose sheen
+            fishSheenColor = 0xC0FFE6DF;
+        } else {
+            fishBodyColor = 0x8CE0F2FE; // Shimmering tropical aqua-silver
+            fishSheenColor = 0xC0F0F9FF;
+        }
+
+        for (int i = 0; i < FISH_COUNT; i++) {
+            float fx = fishPosX[i];
+            float fy = fishPosY[i];
+
+            float facing = fishFacing[i];
+            float absFacing = Math.abs(facing);
+            float sign = facing >= 0f ? 1f : -1f;
+
+            // 3D perspective yaw scale: smoothly narrows to a thin sleek profile, then expands facing other way
+            float drawScaleX = sign * Math.max(0.18f, absFacing);
+            // Vertical banking arch during the apex of turn
+            float turnBank = (1f - absFacing * absFacing) * (sign * -6f * k);
+            float drawScaleY = 1.0f + (1f - absFacing) * 0.16f;
+
+            float sc = fishScale[i] * k;
+            float flen = 32f * sc;
+            float fht = flen * 0.36f;
+
+            // Tail wagging speed: ambient wag + speed boost + turn flick
+            float wagRate = (8.5f + (schoolSpeed / (cruiseSpeed + 1f)) * 4.5f) + (1f - absFacing) * 6.0f;
+            float tailWag = (float) Math.sin(time * wagRate + fishWigglePhase[i]) * (flen * 0.24f);
+
+            c.save();
+            c.translate(fx, fy + turnBank);
+            c.rotate((float) Math.toDegrees(fishPitch[i]));
+            c.scale(drawScaleX, drawScaleY);
+
+            // Streamlined fish body
+            fishPath.reset();
+            fishPath.moveTo(flen * 0.5f, 0f); // Head snout
+            fishPath.cubicTo(
+                flen * 0.20f, -fht * 0.95f,
+                -flen * 0.25f, -fht * 0.70f,
+                -flen * 0.45f, 0f // Tail peduncle
+            );
+            fishPath.cubicTo(
+                -flen * 0.25f, fht * 0.70f,
+                flen * 0.20f, fht * 0.95f,
+                flen * 0.5f, 0f
+            );
+            fishPath.close();
+
+            fishPaint.setColor(fishBodyColor);
+            c.drawPath(fishPath, fishPaint);
+
+            // Caudal fin (tail fin) swinging with harmonic undulation
+            fishPath.reset();
+            fishPath.moveTo(-flen * 0.42f, 0f);
+            fishPath.lineTo(-flen * 0.82f, -fht * 0.85f + tailWag);
+            fishPath.quadTo(-flen * 0.65f, tailWag * 0.5f, -flen * 0.82f, fht * 0.85f + tailWag);
+            fishPath.close();
+
+            fishPaint.setColor(fishSheenColor);
+            c.drawPath(fishPath, fishPaint);
+
+            // Dorsal fin
+            fishPath.reset();
+            fishPath.moveTo(-flen * 0.05f, -fht * 0.55f);
+            fishPath.lineTo(-flen * 0.25f, -fht * 1.15f);
+            fishPath.lineTo(-flen * 0.30f, -fht * 0.40f);
+            fishPath.close();
+            c.drawPath(fishPath, fishPaint);
+
+            // Glistening eye
+            if (absFacing > 0.25f) {
+                fishPaint.setColor(0xE0FFFFFF);
+                c.drawCircle(flen * 0.32f, -fht * 0.18f, 1.8f * sc, fishPaint);
             }
-        }
-        fill.setShader(skyGradient);
-        fill.setAlpha(255);
-        c.drawRect(0, 0, w, h, fill);
-        fill.setShader(null);
 
-        float far = -parallax * FAR * k;
-        if (look.stars > 0.01f) {
-            for (int i = 0; i < stars.length; i += 4) {
-                float a = look.stars * (0.35f + 0.45f * (0.5f + 0.5f * (float) Math.sin(t * 1.3f + stars[i + 3])));
-                fill.setColor(Ui.alpha(0xFFF0E8D2, a));
-                c.drawCircle(stars[i] + far, stars[i + 1], stars[i + 2] * 1.4f * k, fill);
-            }
+            c.restore();
         }
-        if (look.sun0 != 0 && look.sunA > 0.01f) drawDisc(c, far, t);
+    }
 
-        // Soft cloud washes: partly cloudy keeps a fixed composition swaying in place; cloudier skies drift across
-        if (look.clouds > 0 && art.clouds[0] != null) {
-            for (int i = 0; i < look.clouds; i++) {
-                float x, y, width, a = 1;
-                if (kind == PARTLY && i < ANCHORS.length) {
-                    float[] an = ANCHORS[i];
-                    width = CLOUD_W * k * an[2];
-                    a = an[3];
-                    x = (an[0] + (float) Math.sin(t * 2 * Math.PI / (140 + i * 35) + i * 1.7) * 90) * k - parallax * MID * k * 0.6f;
-                    y = an[1] * k;
-                } else {
-                    width = CLOUD_W * k * cloudLen[i] * (kind >= CLOUDY ? 1.3f : 1);
-                    x = (float) (((t / cloudDur[i] + cloudPh[i]) % 1.0) * (w + width)) - width - parallax * MID * k * 0.6f;
-                    y = (cloudY[i] - 40) * k;
-                }
-                bitmapPaint.setColor(Ui.alpha(0xFF000000, a));
-                dst.set(x, y, x + width, y + CLOUD_H * k * (width / (CLOUD_W * k)));
-                c.drawBitmap(art.clouds[i % 3], null, dst, bitmapPaint);
-            }
-        }
-        if (kind == STORM) helper.drawLightning(c, t, -parallax * MID * k);
+    private void drawReflectionPath(Canvas c, float horizonY, float pX, float time) {
+        if (curSunAlpha <= 0.05f) return;
+        float cx = curSunX - pX * 18f * k;
+        if (cx < -100f * k || cx > w + 100f * k) return;
 
-        // Mountains (the previous set underneath while the new one fades in), with mist drifting between the depths
-        float fade = 1;
-        if (fading != null) {
-            fade = Math.min(1, (SystemClock.uptimeMillis() - fadeAt) / 2000f);
-            if (fade >= 1) {
-                fading.recycle();
-                fading = null;
-            }
-        }
-        float[] depth = DEPTH;
-        Bitmap mist = helper.mist();
-        for (int i = 0; i < 3; i++) {
-            float x = -MARGIN * k - parallax * depth[i] * k, y = TOP * k;
-            if (fading != null) {
-                bitmapPaint.setColor(0xFF000000);
-                dst.set(x, y, x + fading.width, y + fading.height);
-                c.drawBitmap(fading.ridges[i], null, dst, bitmapPaint);
-            }
-            bitmapPaint.setColor(Ui.alpha(0xFF000000, fade));
-            dst.set(x, y, x + art.width, y + art.height);
-            c.drawBitmap(art.ridges[i], null, dst, bitmapPaint);
-            if (i == 2 && !look.fog && look.mist < 1.2f || mist == null) continue;
-            float a = look.fog ? 0.9f : Math.min(0.95f, (night ? 0.35f : 0.5f) * look.mist);
-            bitmapPaint.setColor(Ui.alpha(look.sky1, a));
-            float drift = (float) Math.sin(t * 2 * Math.PI / (50 + i * 15) + i * 2) * 200 * k - 340 * k - parallax * depth[i] * k;
-            c.drawBitmap(mist, drift, (440 + i * 110) * k, bitmapPaint);
-        }
+        int gleam = isMoon ? 0xFFD8EAFF : (curNightFactor > 0.35f ? 0xFFFF8E32 : 0xFFFFD66E);
+        strokePaint.setStyle(Paint.Style.STROKE);
+        strokePaint.setStrokeCap(Paint.Cap.ROUND);
 
-        if (drizzle) drawGlass(c, t, 0, night, -parallax * NEAR * k);
-        if (kind == RAIN || kind == STORM) {
-            drawRain(c, t, -parallax * NEAR * k, kind == STORM, night);   // light rain outside, faint
-            drawGlass(c, t, kind == STORM ? 2 : 1, night, -parallax * NEAR * k);   // and drops on the glass in front
+        for (float y = horizonY + 2f * k; y < h; y += 14f * k) {
+            float progress = (y - horizonY) / (h - horizonY);
+            float spread = (20f + progress * 240f) * k;
+            float waveWobble = (float) Math.sin(y * 0.04f + time * 3.5f) * 14f * k * progress;
+            float rx = cx + waveWobble;
+            float shimmer = 0.35f + 0.65f * (float) Math.sin(y * 0.15f - time * 5f);
+            int alpha = Math.round(255f * curSunAlpha * (1f - progress * 0.65f) * shimmer * 0.45f);
+            if (alpha <= 0) continue;
+
+            strokePaint.setColor((gleam & 0x00FFFFFF) | (alpha << 24));
+            strokePaint.setStrokeWidth((2.0f + progress * 3.5f) * k);
+            c.drawLine(rx - spread * 0.5f, y, rx + spread * 0.5f, y, strokePaint);
+        }
+    }
+
+    private void drawWaveLayer(Canvas c, float baseY, float freq, float amp, float phase, float offset,
+                               int color, float alpha, float pX, boolean hasFoam) {
+        path.reset();
+        path.moveTo(0, h);
+        float step = 20f * k;
+        for (float x = 0; x <= w + step; x += step) {
+            float y = baseY + (float) Math.sin((x + pX) * freq + phase + offset) * amp
+                + (float) Math.cos((x + pX) * (freq * 1.8f) - phase * 0.7f) * (amp * 0.45f);
+            if (x == 0) path.lineTo(0, y);
+            else path.lineTo(x, y);
+        }
+        path.lineTo(w, h);
+        path.close();
+
+        paint.setStyle(Paint.Style.FILL);
+        paint.setColor(Ui.alpha(color, alpha));
+        c.drawPath(path, paint);
+
+        if (hasFoam) {
+            strokePaint.setStyle(Paint.Style.STROKE);
+            strokePaint.setStrokeWidth(2.2f * k);
+            float foamAlpha = isMoon ? 0.35f : 0.50f;
+            int foamRgb = isMoon ? 0xE8F4FF : (curNightFactor > 0.4f ? 0xFFDEC0 : 0xFFFFFF);
+            strokePaint.setColor((foamRgb & 0x00FFFFFF) | (Math.round(255f * foamAlpha) << 24));
+
+            path2.reset();
+            for (float x = 0; x <= w + step; x += step) {
+                float y = baseY + (float) Math.sin((x + pX) * freq + phase + offset) * amp
+                    + (float) Math.cos((x + pX) * (freq * 1.8f) - phase * 0.7f) * (amp * 0.45f);
+                if (x == 0) path2.moveTo(0, y);
+                else path2.lineTo(x, y);
+            }
+            c.drawPath(path2, strokePaint);
+        }
+    }
+
+    /** Shoreline and palm trees stay serenely static, rooted without camera movement. */
+    private void drawShoreAndPalms(Canvas c, float time, boolean rain) {
+        // 1. Wet sand beach tidal zone
+        path.reset();
+        path.moveTo(w * 0.48f, h);
+        path.cubicTo(
+            w * 0.62f, h * 0.88f,
+            w * 0.75f, h * 0.80f,
+            w, h * 0.76f
+        );
+        path.lineTo(w, h);
+        path.close();
+        paint.setStyle(Paint.Style.FILL);
+        paint.setColor(curSand1);
+        c.drawPath(path, paint);
+
+        // 2. Main dry sand dune
+        path.reset();
+        path.moveTo(w * 0.56f, h);
+        path.cubicTo(
+            w * 0.68f, h * 0.84f,
+            w * 0.80f, h * 0.74f,
+            w, h * 0.70f
+        );
+        path.lineTo(w, h);
+        path.close();
+        paint.setColor(curSand0);
+        c.drawPath(path, paint);
+
+        // 3. Vector coconut palm trees (peaceful ambient wind sway)
+        drawPalmTree(c, w * 0.83f, h * 0.88f, 460f * k, -0.18f, time, rain, 0);
+        drawPalmTree(c, w * 0.93f, h * 0.89f, 380f * k, 0.12f, time, rain, 1);
+    }
+
+    private void drawPalmTree(Canvas c, float baseX, float baseY, float treeHeight, float lean, float time, boolean rain, int seed) {
+        float windSpeed = rain ? 2.5f : 1.5f;
+        float swayAngle = (float) Math.sin(time * windSpeed + seed * 1.5f) * (rain ? 0.08f : 0.04f);
+        float totalLean = lean + swayAngle;
+
+        float crownX = baseX + (float) Math.sin(totalLean) * treeHeight;
+        float crownY = baseY - (float) Math.cos(totalLean) * treeHeight;
+        float midX = (baseX + crownX) * 0.5f + (float) Math.sin(totalLean * 1.4f) * (treeHeight * 0.12f);
+        float midY = (baseY + crownY) * 0.5f;
+
+        // Trunk
+        paint.setStyle(Paint.Style.FILL);
+        paint.setColor(curPalm);
+
+        float baseW = 20f * k;
+        float crownW = 9f * k;
+        path.reset();
+        path.moveTo(baseX - baseW * 0.5f, baseY);
+        path.quadTo(midX - (baseW + crownW) * 0.28f, midY, crownX - crownW * 0.5f, crownY);
+        path.lineTo(crownX + crownW * 0.5f, crownY);
+        path.quadTo(midX + (baseW + crownW) * 0.28f, midY, baseX + baseW * 0.5f, baseY);
+        path.close();
+        c.drawPath(path, paint);
+
+        // Coconuts cluster
+        paint.setColor(blend(curPalm, 0xFF000000, 0.25f));
+        c.drawCircle(crownX - 5f * k, crownY + 8f * k, 6.5f * k, paint);
+        c.drawCircle(crownX + 5f * k, crownY + 9f * k, 6.0f * k, paint);
+        c.drawCircle(crownX, crownY + 14f * k, 5.5f * k, paint);
+
+        // 7 Arching palm fronds
+        float[] frondAngles = {-2.4f, -1.8f, -1.1f, -0.5f, 0.2f, 0.8f, 1.4f};
+        float[] frondLens = {170f, 210f, 240f, 220f, 190f, 160f, 140f};
+
+        for (int i = 0; i < frondAngles.length; i++) {
+            float frondSway = (float) Math.sin(time * (windSpeed * 1.2f) + i * 0.7f + seed) * (rain ? 0.12f : 0.06f);
+            float angle = totalLean + frondAngles[i] + frondSway;
+            float fLen = frondLens[i] * k;
+
+            float tipX = crownX + (float) Math.cos(angle) * fLen;
+            float tipY = crownY + (float) Math.sin(angle) * fLen + (fLen * 0.22f);
+            float ctrlX = crownX + (float) Math.cos(angle) * (fLen * 0.55f);
+            float ctrlY = crownY + (float) Math.sin(angle) * (fLen * 0.45f) - (fLen * 0.10f);
+
+            // Leaf silhouette
+            path.reset();
+            path.moveTo(crownX, crownY);
+            float leafW = 22f * k;
+            float normX = -(float) Math.sin(angle) * leafW;
+            float normY = (float) Math.cos(angle) * leafW;
+            path.quadTo(ctrlX + normX, ctrlY + normY, tipX, tipY);
+            path.quadTo(ctrlX - normX * 0.6f, ctrlY - normY * 0.6f, crownX, crownY);
+            path.close();
+
+            paint.setColor(curPalm);
+            c.drawPath(path, paint);
+
+            // Frond central spine line
+            strokePaint.setStyle(Paint.Style.STROKE);
+            strokePaint.setStrokeWidth(1.6f * k);
+            strokePaint.setColor(blend(curPalm, 0xFFFFFFFF, 0.15f));
+            path2.reset();
+            path2.moveTo(crownX, crownY);
+            path2.quadTo(ctrlX, ctrlY, tipX, tipY);
+            c.drawPath(path2, strokePaint);
         }
     }
 
     /**
-     * Raindrops on the glass: a faint veil, drops of all sizes, and big ones running down with a wet trail. `level`: 0
-     * drizzle (a sprinkle of small drops, two running), 1 rain, 2 storm.
+     * Renders crisp, luminous silver-white raindrops with clear contrast across all daylight,
+     * golden-hour, sunset, and nighttime conditions.
      */
-    private void drawGlass(Canvas c, float t, int level, boolean night, float shift) {
-        if (dropDay == null) {
-            dropDay = drop(false);
-            dropNight = drop(true);
-        }
-        Bitmap sprite = night ? dropNight : dropDay;
-        fill.setShader(null);
-        fill.setColor(night ? 0x2E141E30 : 0x29E1E8EE);
-        c.drawRect(0, 0, w, h, fill);
-        bitmapPaint.setColor(0xFF000000);
-        float sx = shift * 0.15f;
-        int count = level == 0 ? 130 : level == 1 ? 200 : 280;
-        float small = level == 0 ? 0.7f : 1;
-        fill.setColor(night ? 0x59D2DCF0 : 0x99FFFFFF);
+    private void drawRain(Canvas c, float time, boolean heavy, float shift) {
+        int count = heavy ? RAIN_COUNT : 100;
+        int fgCount = 0, bgCount = 0;
+        float span = h + 240f * k;
+        float slant = 0.16f;
+        float wrap = w + 300f * k;
+
         for (int i = 0; i < count; i++) {
-            float r = gr[i] * k * small, x = gx[i] * k + sx, y = gy[i] * k;
-            if (r < 1.4f) {
-                c.drawRect(x, y, x + 1.5f, y + 1.5f, fill);
-                continue;
+            float y = ((rainPhase[i] + time * rainSpeed[i] / span) % 1.0f) * span - 120f * k;
+            float x = rainX[i] * wrap - y * slant + shift;
+            x = ((x % wrap) + wrap) % wrap - 100f * k;
+
+            if (rainIsFg[i]) {
+                rainFgLines[fgCount] = x;
+                rainFgLines[fgCount + 1] = y;
+                rainFgLines[fgCount + 2] = x - rainLen[i] * k * slant;
+                rainFgLines[fgCount + 3] = y + rainLen[i] * k;
+                fgCount += 4;
+            } else {
+                rainBgLines[bgCount] = x;
+                rainBgLines[bgCount + 1] = y;
+                rainBgLines[bgCount + 2] = x - rainLen[i] * k * slant * 0.75f;
+                rainBgLines[bgCount + 3] = y + rainLen[i] * k * 0.75f;
+                bgCount += 4;
             }
-            dst.set(x - r * 1.19f, y - r * 1.19f * gsq[i], x + r * 1.19f, y + r * 1.19f * gsq[i]);
-            c.drawBitmap(sprite, null, dst, bitmapPaint);
         }
-        trailPaint.setColor(night ? 0x24C8D7F0 : 0x47FFFFFF);
-        int runners = level == 0 ? 2 : level == 1 ? 4 : 6;
-        for (int i = 0; i < runners; i++) {
-            float span = 1080 + 400;
-            float y = (float) (((t * rspeed[i] / span) + rph[i]) % 1.0) * span - 200, top = Math.max(-200, y - 520);
-            trailPaint.setStrokeWidth(Math.max(1, rr[i] * 0.45f * k));
-            trail.reset();
-            for (float yy = top; yy <= y; yy += 12) {
-                float px = (rx[i] + wobble(yy, rwob[i])) * k + sx, py = yy * k;
-                if (yy == top) trail.moveTo(px, py);
-                else trail.lineTo(px, py);
-            }
-            c.drawPath(trail, trailPaint);
-            for (float yy = y - 40; yy > top; yy -= 46) {
-                float br = (2 + Math.abs((float) Math.sin(yy * 1.7f + rwob[i])) * 2.5f) * k, px = (rx[i] + wobble(yy, rwob[i])) * k + sx;
-                dst.set(px - br, yy * k - br, px + br, yy * k + br);
-                c.drawBitmap(sprite, null, dst, bitmapPaint);
-            }
-            float r = rr[i] * k, px = (rx[i] + wobble(y, rwob[i])) * k + sx;
-            dst.set(px - r * 1.15f, y * k - r * 1.35f, px + r * 1.15f, y * k + r * 1.35f);
-            c.drawBitmap(sprite, null, dst, bitmapPaint);
+
+        // Luminous water drops reflecting daylight, sunset glow, or moon
+        int fgColor, bgColor;
+        if (isMoon) {
+            fgColor = 0x8CD2E6FF; // Luminous moonlit silver
+            bgColor = 0x48A0C2E8;
+        } else if (effectiveHour >= 16.0f && effectiveHour <= 19.2f) {
+            fgColor = 0xAAFFE6D4; // Sunset amber-gold rim reflection
+            bgColor = 0x55E8B49E;
+        } else if (effectiveHour >= 5.0f && effectiveHour < 7.0f) {
+            fgColor = 0xAAF8E4DF; // Sunrise coral gleam
+            bgColor = 0x55E4B2AA;
+        } else {
+            fgColor = 0xA0F2F8FF; // Bright crystal daylight drops
+            bgColor = 0x58D0E4FA;
         }
+
+        rainBgPaint.setColor(bgColor);
+        rainBgPaint.setStrokeWidth(Math.max(1.0f, 1.4f * k));
+        c.drawLines(rainBgLines, 0, bgCount, rainBgPaint);
+
+        rainFgPaint.setColor(fgColor);
+        rainFgPaint.setStrokeWidth(Math.max(1.6f, 2.3f * k));
+        c.drawLines(rainFgLines, 0, fgCount, rainFgPaint);
     }
 
-    private static float wobble(float y, float w) {
-        return (float) (Math.sin(y * 0.018 + w) * 5 + Math.sin(y * 0.051 + w * 2) * 2);
-    }
-
-    /** One drop, drawn once: a clear body darker at the top and lighter at the bottom, a shadow edge, a highlight. */
-    private static Bitmap drop(boolean night) {
-        int s = 128;
-        float x = s / 2f, y = s / 2f, r = s * 0.42f;
-        Bitmap b = Bitmap.createBitmap(s, s, Bitmap.Config.ARGB_8888);
-        Canvas c = new Canvas(b);
-        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
-        p.setShader(new LinearGradient(0, y - r, 0, y + r, new int[] {night ? 0x6B040812 : 0x421C2A3A,
-                night ? 0x2E3C4B64 : 0x2EB4C8D7, night ? 0x80CDDCF5 : 0x99FFFFFF}, new float[] {0, 0.55f, 1}, Shader.TileMode.CLAMP));
-        c.drawCircle(x, y, r, p);
-        p.setShader(null);
-        p.setStyle(Paint.Style.STROKE);
-        p.setStrokeCap(Paint.Cap.ROUND);
-        p.setStrokeWidth(s * 0.045f);
-        p.setColor(night ? 0x73000000 : 0x4714202E);
-        RectF o = new RectF(x - r + s * 0.02f, y - r + s * 0.02f, x + r - s * 0.02f, y + r - s * 0.02f);
-        c.drawArc(o, 22, 140, false, p);
-        p.setStrokeWidth(s * 0.025f);
-        p.setColor(night ? 0x40DCE6FA : 0x8CFFFFFF);
-        c.drawArc(o, 198, 90, false, p);
-        p.setStyle(Paint.Style.FILL);
-        p.setColor(night ? 0xE6F4F7FF : 0xF2FFFFFF);
-        c.save();
-        c.rotate(-34, x - r * 0.36f, y - r * 0.38f);
-        c.drawOval(new RectF(x - r * 0.62f, y - r * 0.54f, x - r * 0.1f, y - r * 0.22f), p);
-        c.restore();
-        c.drawCircle(x + r * 0.3f, y + r * 0.45f, r * 0.07f, p);
-        return b;
-    }
-
-    private void takeReady() {
-        Art r;
-        synchronized (lock) {
-            r = ready;
-            ready = null;
-        }
-        if (r == null) return;
-        if (art != null && art.key == r.key) {
-            r.recycle();
-            return;
-        }
-        if (fading != null) fading.recycle();
-        fading = art;
-        art = r;
-        fadeAt = SystemClock.uptimeMillis();
-    }
-
-    /** The sun or moon: a soft glow, the disc lit from the top, and a few wavy brush bands across its lower half. */
-    private void drawDisc(Canvas c, float far, float t) {
-        float x = look.sx * k + far, y = look.sy * k, r = look.sr * k, a = Math.min(1, look.sunA);
-        c.save();
-        c.translate(far, 0);
-        fill.setShader(sunGlow);
-        fill.setAlpha(Math.round(255 * a));
-        c.drawCircle(look.sx * k, y, r * 3, fill);
-        fill.setShader(sunGradient);
-        c.drawCircle(look.sx * k, y, r, fill);
-        fill.setShader(null);
-        c.restore();
-        disc.reset();
-        disc.addCircle(x, y, r, Path.Direction.CW);
-        c.save();
-        c.clipPath(disc);
-        fill.setColor(Ui.alpha(look.moon ? 0x14FFFAEB : 0x33FFF2E4, a));
-        for (int i = 0; i < 4; i++) {
-            float by = y + r * (0.02f + i * 0.22f);
-            band.reset();
-            band.moveTo(x - r, y + r * 1.2f);
-            for (float xx = -r; xx <= r + 0.01f; xx += r / 12) band.lineTo(x + xx, by + (float) Math.sin(xx / r * 3 + i * 1.3f + t * 0.15f) * r * 0.06f);
-            band.lineTo(x + r, y + r * 1.2f);
-            band.close();
-            c.drawPath(band, fill);
-        }
-        c.restore();
-    }
-
-    private void drawRain(Canvas c, float t, float shift, boolean heavy, boolean night) {
-        int count = heavy ? DROPS : 150, nn = 0, nf = 0;
-        float span = h + 300 * k, slant = 0.12f, wrap = w + 300 * k;
-        for (int i = 0; i < count; i++) {
-            float y = (float) (((dropPhase[i] + t * dropSpeed[i] * (heavy ? 1.25f : 1) / span) % 1.0) * span) - 200 * k;
-            float x = dropX[i] - y * slant + shift;
-            x = ((x % wrap) + wrap) % wrap - 150 * k;
-            float[] lines = dropNear[i] ? nearLines : farLines;
-            int at = dropNear[i] ? nn : nf;
-            lines[at] = x;
-            lines[at + 1] = y;
-            lines[at + 2] = x - dropLen[i] * slant;
-            lines[at + 3] = y + dropLen[i];
-            if (dropNear[i]) nn += 4;
-            else nf += 4;
-        }
-        rainFar.setColor(night ? 0x0FD2DCEB : 0x0E323E4A);   // faint: it's outside, behind the drops on the glass
-        rainNear.setColor(night ? 0x1BD2DCEB : 0x18323E4A);
-        c.drawLines(farLines, 0, nf, rainFar);
-        c.drawLines(nearLines, 0, nn, rainNear);
-    }
-
-    // MARK: - Art (drawn off the main thread)
-
-    private Art build(long key, int kind, float hour) {
-        Look l = new Look();
-        look(kind, Math.round(hour * 10) / 10f, l);
-        Art a = new Art();
-        a.key = key;
-        boolean night = l.night >= 0.5f;
-        float m = MARGIN * k;
-        int bw = Math.round(w + 2 * m), bh = Math.max(1, Math.round(h - TOP * k));
-        a.width = bw;
-        a.height = bh;
-        int mistColor = l.sky1;
-        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG), line = new Paint(Paint.ANTI_ALIAS_FLAG);
-        line.setStyle(Paint.Style.STROKE);
-        line.setStrokeWidth(Math.max(0.6f, 1.3f * k));
-        for (int g = 0; g < 3; g++) {
-            Bitmap b = Bitmap.createBitmap(Math.max(1, Math.round(bw * RES[g])), Math.max(1, Math.round(bh * RES[g])), Bitmap.Config.ARGB_8888);
-            Canvas c = new Canvas(b);
-            c.scale(RES[g], RES[g]);
-            c.translate(0, -TOP * k);
-            for (int i = g * 2; i < g * 2 + 2; i++) {
-                float[] r = RIDGES[i];
-                int crest = blend(l.far, l.near, (float) Math.pow(i / 5f, 1.15));
-                if (l.fog) crest = blend(crest, mistColor, i < 4 ? 0.55f - i * 0.08f : 0.25f);
-                Path ridge = new Path();
-                ridge.moveTo(0, h);
-                for (int x = -160; x <= 2080; x += 8) ridge.lineTo(x * k + m, ridgeY(x, r) * k);
-                ridge.lineTo(bw, h);
-                ridge.close();
-                p.setShader(new LinearGradient(0, (r[0] - r[1] * 1.4f) * k, 0, (r[0] + 150) * k,
-                        new int[] {crest, blend(crest, mistColor, 0.3f), blend(crest, mistColor, 0.6f)}, new float[] {0, 0.5f, 1}, Shader.TileMode.CLAMP));
-                c.drawPath(ridge, p);
-                // Contour lines flowing down from the crest
-                c.save();
-                c.clipPath(ridge);
-                line.setColor(Ui.alpha(blend(crest, night ? 0xFF8899AA : 0xFF000000, night ? 0.25f : 0.3f), 0.4f));
-                for (int j = 1; j <= 4; j++) {
-                    float off = j * j * 4 + 6;
-                    Path contour = new Path();
-                    for (int x = -160; x <= 2080; x += 8) {
-                        float y = (ridgeY(x + j * 15, r) + off + 7 * (float) Math.sin(x * 0.011 + j * 1.7 + i)) * k;
-                        if (x == -160) contour.moveTo(x * k + m, y);
-                        else contour.lineTo(x * k + m, y);
-                    }
-                    c.drawPath(contour, line);
-                }
-                c.restore();
-            }
-            a.ridges[g] = b;
-        }
-        if (l.clouds > 0) {
-            int tone = night ? blend(l.sky1, l.far, 0.5f) : kind == STORM ? blend(l.sky0, l.near, 0.3f)
-                    : kind >= CLOUDY ? blend(blend(l.sky1, 0xFFFFFFFF, 0.55f), l.far, 0.12f) : blend(l.sky1, 0xFFFFFFFF, 0.92f);
-            // Low sun (morning, golden hour, sunset): the clouds melt into the sky's own warm colour, a touch lighter and
-            // more see-through, instead of standing out white (or as a separate peach)
-            float fade = 1;
-            if (!night && kind != STORM && l.sunA > 0) {
-                float low = Math.max(0, Math.min(1, (l.sy - 250) / 220f));
-                if (low > 0) {
-                    int skyLit = blend(blend(l.sky0, l.sky1, 0.45f), 0xFFFFFFFF, 0.14f);
-                    tone = blend(tone, skyLit, (kind >= CLOUDY ? 0.5f : 0.9f) * low);
-                    fade = 1 - (kind >= CLOUDY ? 0.15f : 0.35f) * low;
-                }
-            }
-            for (int i = 0; i < 3; i++) a.clouds[i] = cloud(i, tone, fade);
-        }
-        return a;
-    }
-
-    private static float ridgeY(float x, float[] r) {
-        float f = r[2], ph = r[3];
-        double v = 0.5 * Math.sin(x * f + ph) + 0.25 * Math.sin(x * f * 2.1 + ph * 1.3) + 0.12 * Math.sin(x * f * 4.3 + ph * 0.7)
-                + 0.06 * Math.sin(x * f * 8.7 + ph * 2.1);
-        v += 0.45 * Math.pow(Math.max(0, Math.sin(x * f * 0.6 + ph * 0.4)), 3);
-        // low on the left (under the clock), tall on the right
-        return (float) (r[0] - r[1] * v * (0.45 + 0.85 * Math.min(1, Math.max(0, x / 1920))));
-    }
-
-    /** A soft cloud wash: a few overlapping ellipses blurred together once, like a watercolor wash (no outline). */
-    private Bitmap cloud(int shape, int tone, float fade) {
-        float sc = k * CLOUD_RES;
-        int bw = Math.max(32, Math.round(CLOUD_W * sc)), bh = Math.max(8, Math.round(CLOUD_H * sc));
-        Bitmap b = Bitmap.createBitmap(bw, bh, Bitmap.Config.ARGB_8888);
-        Canvas c = new Canvas(b);
-        c.scale(sc, sc);
-        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
-        p.setMaskFilter(new BlurMaskFilter(60, BlurMaskFilter.Blur.NORMAL));   // in the 1100x300 box's units
-        for (float[] e : WASHES[shape]) {
-            p.setColor(Ui.alpha(tone | 0xFF000000, e[4] * fade));
-            c.drawOval(new RectF(e[0] - e[2], e[1] - e[3], e[0] + e[2], e[1] + e[3]), p);
-        }
-        return b;
-    }
-
-    private static int blend(int a, int b, float t) {
-        if (t <= 0) return a;
-        if (t >= 1) return b;
-        int aa = a >>> 24, ar = (a >> 16) & 255, ag = (a >> 8) & 255, ab = a & 255;
-        int ba = b >>> 24, br = (b >> 16) & 255, bg = (b >> 8) & 255, bb = b & 255;
-        return Math.round(aa + (ba - aa) * t) << 24 | Math.round(ar + (br - ar) * t) << 16
-                | Math.round(ag + (bg - ag) * t) << 8 | Math.round(ab + (bb - ab) * t);
+    private static int blend(int c0, int c1, float t) {
+        t = Math.max(0f, Math.min(1f, t));
+        int a0 = (c0 >>> 24), r0 = (c0 >> 16) & 0xFF, g0 = (c0 >> 8) & 0xFF, b0 = c0 & 0xFF;
+        int a1 = (c1 >>> 24), r1 = (c1 >> 16) & 0xFF, g1 = (c1 >> 8) & 0xFF, b1 = c1 & 0xFF;
+        int a = Math.round(a0 + (a1 - a0) * t);
+        int r = Math.round(r0 + (r1 - r0) * t);
+        int g = Math.round(g0 + (g1 - g0) * t);
+        int b = Math.round(b0 + (b1 - b0) * t);
+        return (a << 24) | (r << 16) | (g << 8) | b;
     }
 }

@@ -240,7 +240,7 @@ public final class OtaUpdate {
         if (CURRENT_INFO.changelog != null && !CURRENT_INFO.changelog.isEmpty()) {
             return cleanChangelog(CURRENT_INFO.changelog);
         }
-        return "• Penambahan pilihan tema sepakbola (Soccer Theme) pada wallpaper dan tampilan launcher.";
+        return "• Pembaruan tema live wallpaper Ocean and Coast interaktif dengan kawanan ikan dan fisika pergerakan 3D yaw yang mulus.";
     }
 
     public static String cleanChangelog(String raw) {
@@ -258,9 +258,9 @@ public final class OtaUpdate {
     private static String getAppVersion(Context c) {
         try {
             PackageInfo p = c.getPackageManager().getPackageInfo(c.getPackageName(), 0);
-            return p.versionName != null ? p.versionName : "2.7";
+            return p.versionName != null ? p.versionName : "2.8";
         } catch (Exception e) {
-            return "2.7";
+            return "2.8";
         }
     }
 
